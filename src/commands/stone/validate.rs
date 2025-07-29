@@ -1,5 +1,6 @@
 use crate::log::*;
 use crate::manifest::Manifest;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub fn validate_command(manifest_path: PathBuf, input_dir: PathBuf) -> Result<(), String> {
@@ -21,14 +22,15 @@ pub fn validate_command(manifest_path: PathBuf, input_dir: PathBuf) -> Result<()
         // Process each image in the device
         for (image_name, image) in &device.images {
             // Process each file in the image
-            for file_entry in &image.files {
-                let file_path = input_dir.join(&file_entry.filename);
+            for file_entry in image.files() {
+                let file_path = input_dir.join(file_entry.input_filename());
 
                 if !file_path.exists() {
+                    println!("DNE: {file_path:?}");
                     missing_files.push((
                         device_name.clone(),
                         image_name.clone(),
-                        file_entry.filename.clone(),
+                        file_entry.input_filename().to_string(),
                     ));
                 }
             }
@@ -43,11 +45,20 @@ pub fn validate_command(manifest_path: PathBuf, input_dir: PathBuf) -> Result<()
             if missing_files.len() == 1 { "" } else { "s" }
         );
 
+        // Group missing files by device and image
+        let mut grouped: HashMap<(String, String), Vec<String>> = HashMap::new();
         for (device, image, filename) in missing_files {
-            error_msg.push_str(&format!(
-                "\n  - {} (device: {}, image: {})",
-                filename, device, image
-            ));
+            grouped
+                .entry((device, image))
+                .or_insert(Vec::new())
+                .push(filename);
+        }
+
+        for ((device, image), filenames) in grouped {
+            error_msg.push_str(&format!("\n  - device: {}, image: {}:", device, image));
+            for filename in filenames {
+                error_msg.push_str(&format!("\n    - {}", filename));
+            }
         }
 
         return Err(error_msg);
