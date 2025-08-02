@@ -1,14 +1,61 @@
 use crate::fat::{FatImageOptions, FatType, create_fat_image};
 use crate::log::*;
 use crate::manifest::Manifest;
+use clap::Args;
 use serde_json;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Args, Debug)]
+pub struct BuildArgs {
+    /// Path to the manifest.json file
+    #[arg(
+        short = 'm',
+        long = "manifest-path",
+        value_name = "PATH",
+        default_value = "manifest.json"
+    )]
+    pub manifest: PathBuf,
+
+    /// Path to the input directory
+    #[arg(
+        short = 'i',
+        long = "input-dir",
+        value_name = "DIR",
+        default_value = "."
+    )]
+    pub input_dir: PathBuf,
+
+    /// Path to the output directory
+    #[arg(
+        short = 'o',
+        long = "output-dir",
+        value_name = "DIR",
+        default_value = "."
+    )]
+    pub output_dir: PathBuf,
+
+    /// Enable verbose output
+    #[arg(short = 'v', long = "verbose")]
+    pub verbose: bool,
+}
+
+impl BuildArgs {
+    pub fn execute(&self) -> Result<(), String> {
+        build_command(
+            &self.manifest,
+            &self.input_dir,
+            &self.output_dir,
+            self.verbose,
+        )
+    }
+}
+
 pub fn build_command(
-    manifest_path: PathBuf,
-    input_dir: PathBuf,
-    output_dir: PathBuf,
+    manifest_path: &PathBuf,
+    input_dir: &PathBuf,
+    output_dir: &PathBuf,
+    verbose: bool,
 ) -> Result<(), String> {
     // Check if manifest file exists
     if !manifest_path.exists() {
@@ -18,10 +65,10 @@ pub fn build_command(
         ));
     }
 
-    let manifest = Manifest::from_file(&manifest_path)?;
+    let manifest = Manifest::from_file(manifest_path)?;
 
     // Ensure output directory exists
-    if let Err(e) = fs::create_dir_all(&output_dir) {
+    if let Err(e) = fs::create_dir_all(output_dir) {
         return Err(format!(
             "Failed to create output directory '{}': {}",
             output_dir.display(),
@@ -34,9 +81,21 @@ pub fn build_command(
 
     // Process each storage device
     for (device_name, device) in &manifest.storage_devices {
+        log_info(&format!(
+            "Processing storage device '{}' with build type '{}'.",
+            device_name, device.build
+        ));
+
         // Process each image in the device
         for (image_name, image) in &device.images {
-            if let Err(e) = process_image(device_name, image_name, image, &input_dir, &output_dir) {
+            if let Err(e) = process_image(
+                device_name,
+                image_name,
+                image,
+                input_dir,
+                output_dir,
+                verbose,
+            ) {
                 errors.push(format!(
                     "Failed to process image '{}' in device '{}': {}",
                     image_name, device_name, e
@@ -54,7 +113,7 @@ pub fn build_command(
         return Err(error_msg);
     }
 
-    log_success("Build completed successfully.");
+    log_success("Built.");
     Ok(())
 }
 
@@ -64,14 +123,32 @@ fn process_image(
     image: &crate::manifest::Image,
     input_dir: &Path,
     output_dir: &Path,
+    verbose: bool,
 ) -> Result<(), String> {
-    let input_path = input_dir.join(image.filename());
-    let output_path = output_dir.join(image.filename());
+    // Determine build type for logging
+    let build_type_name = match image.build() {
+        Some(build_type) => build_type.clone(),
+        None => "copy".to_string(),
+    };
+
+    log_info(&format!(
+        "Processing image '{}' with build type '{}'.",
+        image_name, build_type_name
+    ));
+
+    // Handle both string and object image types
+    let (input_filename, output_filename) = match image {
+        crate::manifest::Image::String(filename) => (filename.as_str(), filename.as_str()),
+        crate::manifest::Image::Object { out, .. } => (out.as_str(), out.as_str()),
+    };
+
+    let input_path = input_dir.join(input_filename);
+    let output_path = output_dir.join(output_filename);
 
     match image.build() {
         Some(build_type) => match build_type.as_str() {
-            "mkfat" => build_mkfat(&input_path, &output_path, image),
-            "mkfwup" => build_mkfwup(&input_path, &output_path, image),
+            "fat" => build_fat(&input_path, &output_path, image, verbose),
+            "fwup" => build_fwup(&input_path, &output_path, image, verbose),
             _ => Err(format!(
                 "Unsupported build type '{}' for image '{}'.",
                 build_type, image_name
@@ -79,12 +156,12 @@ fn process_image(
         },
         None => {
             // Simple file copy
-            copy_file(&input_path, &output_path)
+            copy_file(&input_path, &output_path, verbose)
         }
     }
 }
 
-fn copy_file(input_path: &Path, output_path: &Path) -> Result<(), String> {
+fn copy_file(input_path: &Path, output_path: &Path, verbose: bool) -> Result<(), String> {
     // Check if input file exists
     if !input_path.exists() {
         return Err(format!("Input file '{}' not found.", input_path.display()));
@@ -111,19 +188,22 @@ fn copy_file(input_path: &Path, output_path: &Path) -> Result<(), String> {
         ));
     }
 
-    log_success(&format!(
-        "Copied file '{}' to '{}'.",
-        input_path.display(),
-        output_path.display()
-    ));
+    if verbose {
+        log_debug(&format!(
+            "Copied from and to:\n  {}\n  {}",
+            input_path.display(),
+            output_path.display()
+        ));
+    }
 
     Ok(())
 }
 
-fn build_mkfat(
+fn build_fat(
     input_path: &Path,
     output_path: &Path,
     image: &crate::manifest::Image,
+    verbose: bool,
 ) -> Result<(), String> {
     // Create output directory if it doesn't exist
     if let Some(parent) = output_path.parent() {
@@ -148,7 +228,7 @@ fn build_mkfat(
         .map_err(|e| format!("Failed to write temporary manifest: {}", e))?;
 
     // Determine size from build_args or use default
-    let size_mb = parse_size_from_args(image.build_args()).unwrap_or(32);
+    let size_mb = extract_size_from_build_args(image.build_args()).unwrap_or(32);
 
     // Create fat image options
     let options = FatImageOptions::new()
@@ -157,7 +237,7 @@ fn build_mkfat(
         .with_output_path(output_path)
         .with_size_mb(size_mb)
         .with_fat_type(FatType::Fat32)
-        .with_verbose(false);
+        .with_verbose(verbose);
 
     // Create the fat image
     let result = create_fat_image(&options);
@@ -167,7 +247,9 @@ fn build_mkfat(
 
     match result {
         Ok(()) => {
-            log_success(&format!("Created FAT image '{}'.", output_path.display()));
+            if verbose {
+                log_debug(&format!("Created FAT image '{}'.", output_path.display()));
+            }
             Ok(())
         }
         Err(e) => Err(format!("Failed to create FAT image: {}", e)),
@@ -205,24 +287,43 @@ fn create_fat_manifest(image: &crate::manifest::Image) -> Result<FatManifest, St
     Ok(FatManifest { files: fat_files })
 }
 
-fn parse_size_from_args(args: &[String]) -> Option<u64> {
-    for arg in args {
-        if arg.starts_with("--size=") {
-            if let Some(size_str) = arg.strip_prefix("--size=") {
-                if let Ok(size) = size_str.parse::<u64>() {
-                    return Some(size);
-                }
+fn extract_size_from_build_args(
+    build_args: Option<&std::collections::HashMap<String, serde_json::Value>>,
+) -> Option<u64> {
+    if let Some(args) = build_args {
+        if let Some(size_value) = args.get("size") {
+            if let Some(size_num) = size_value.as_u64() {
+                // Check for size_unit and convert to MB
+                let size_unit = args
+                    .get("size_unit")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("megabytes");
+
+                return Some(match size_unit {
+                    "bytes" => size_num / (1024 * 1024),
+                    "kibibytes" => size_num / 1024,
+                    "mebibytes" => size_num,
+                    "gibibytes" => size_num * 1024,
+                    "tebibytes" => size_num * 1024 * 1024,
+                    "kilobytes" => (size_num * 1000) / (1024 * 1024),
+                    "megabytes" => (size_num * 1000 * 1000) / (1024 * 1024),
+                    "gigabytes" => (size_num * 1000 * 1000 * 1000) / (1024 * 1024),
+                    "terabytes" => (size_num * 1000 * 1000 * 1000 * 1000) / (1024 * 1024),
+                    _ => size_num, // Default to assuming megabytes
+                });
             }
         }
     }
     None
 }
 
-fn build_mkfwup(
+fn build_fwup(
     input_path: &Path,
     output_path: &Path,
-    _image: &crate::manifest::Image,
+    image: &crate::manifest::Image,
+    verbose: bool,
 ) -> Result<(), String> {
+    println!("ATLANTIS WHOA");
     // Create output directory if it doesn't exist
     if let Some(parent) = output_path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
@@ -234,12 +335,67 @@ fn build_mkfwup(
         }
     }
 
-    // TODO: Implement mkfwup build logic
-    // For now, this is a placeholder that will need actual mkfwup implementation
-    log_error(&format!(
-        "mkfwup build not yet implemented for image '{}'.",
-        input_path.display()
-    ));
+    // Extract template from build_args
+    let template = image
+        .build_args()
+        .and_then(|args| args.get("template"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "fwup build requires 'template' in build_args.".to_string())?;
 
-    Err("mkfwup build functionality not yet implemented.".to_string())
+    let template_path = input_path.join(template);
+
+    // Check if template file exists
+    if !template_path.exists() {
+        return Err(format!(
+            "[ERROR] Template file '{}' not found.",
+            template_path.display()
+        ));
+    }
+
+    // For now, implement a basic fwup call
+    // This assumes fwup is installed on the system
+    if verbose {
+        log_debug(&format!(
+            "Executing fwup command: fwup -c -f {} -o {}",
+            template_path.display(),
+            output_path.display()
+        ));
+    }
+
+    let status = std::process::Command::new("fwup")
+        .arg("-c")
+        .arg("-f")
+        .arg(&template_path)
+        .arg("-o")
+        .arg(output_path)
+        .current_dir(input_path)
+        .status();
+
+    match status {
+        Ok(exit_status) => {
+            if exit_status.success() {
+                log_success(&format!(
+                    "Created fwup image '{}' using template '{}'.",
+                    output_path.display(),
+                    template
+                ));
+                Ok(())
+            } else {
+                Err(format!(
+                    "fwup command failed with exit code: {}",
+                    exit_status.code().unwrap_or(-1)
+                ))
+            }
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Err(
+                    "[ERROR] fwup command not found. Please install fwup to build firmware images."
+                        .to_string(),
+                )
+            } else {
+                Err(format!("Failed to execute fwup command: {}", e))
+            }
+        }
+    }
 }

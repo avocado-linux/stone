@@ -5,17 +5,23 @@
   },
   "storage_devices": {
     "rootdisk": {
-      "filename": "avocado-raspberrypi4-rootdisk.zip",
-      "build": "mkfwup",
-      "build_conf": "rootdisk.conf",
-      "build_args": [],
+      "out": "avocado-raspberrypi4-rootdisk.zip",
+      "build": "fwup",
+      "build_args": {
+        "template": "rootdisk.conf"
+      },
       "devpath": "/dev/mmcblk0",
       "block_size": 512,
       "images": {
+        "uboot_env": "uboot.env",
         "boot": {
-          "filename": "boot.img",
-          "build": "mkfat",
-          "build_args": [],
+          "out": "boot.img",
+          "size": 128,
+          "size_unit": "mebibytes",
+          "build_args": {
+            "type": "fat",
+            "variant": "FAT32"
+          },
           "files": [
             "Image",
             "avocado-image-initramfs-avocado-raspberrypi4.cpio.zst",
@@ -23,10 +29,6 @@
             "bcm2711-rpi-400.dtb",
             "bcm2711-rpi-cm4.dtb",
             "bcm2711-rpi-cm4s.dtb",
-            {
-              "in": "u-boot.bin",
-              "out": "kernel8.img"
-            },
             {
               "in": "bootfiles/bootcode.bin",
               "out": "bootcode.bin"
@@ -38,18 +40,6 @@
             {
               "in": "bootfiles/config.txt",
               "out": "config.txt"
-            },
-            {
-              "in": "bootfiles/fixup_cd.dat",
-              "out": "fixup_cd.dat"
-            },
-            {
-              "in": "bootfiles/fixup_db.dat",
-              "out": "fixup_db.dat"
-            },
-            {
-              "in": "bootfiles/fixup_x.dat",
-              "out": "fixup_x.dat"
             },
             {
               "in": "bootfiles/fixup.dat",
@@ -64,10 +54,6 @@
               "out": "fixup4cd.dat"
             },
             {
-              "in": "bootfiles/start4x.elf",
-              "out": "start4x.elf"
-            },
-            {
               "in": "bootfiles/fixup4db.dat",
               "out": "fixup4db.dat"
             },
@@ -76,16 +62,16 @@
               "out": "fixup4x.dat"
             },
             {
-              "in": "bootfiles/start_cd.elf",
-              "out": "start_cd.elf"
+              "in": "bootfiles/fixup_cd.dat",
+              "out": "fixup_cd.dat"
             },
             {
-              "in": "bootfiles/start_db.elf",
-              "out": "start_db.elf"
+              "in": "bootfiles/fixup_db.dat",
+              "out": "fixup_db.dat"
             },
             {
-              "in": "bootfiles/start_x.elf",
-              "out": "start_x.elf"
+              "in": "bootfiles/fixup_x.dat",
+              "out": "fixup_x.dat"
             },
             {
               "in": "bootfiles/start.elf",
@@ -102,12 +88,31 @@
             {
               "in": "bootfiles/start4db.elf",
               "out": "start4db.elf"
+            },
+            {
+              "in": "bootfiles/start4x.elf",
+              "out": "start4x.elf"
+            },
+            {
+              "in": "bootfiles/start_cd.elf",
+              "out": "start_cd.elf"
+            },
+            {
+              "in": "bootfiles/start_db.elf",
+              "out": "start_db.elf"
+            },
+            {
+              "in": "bootfiles/start_x.elf",
+              "out": "start_x.elf"
+            },
+            {
+              "in": "u-boot.bin",
+              "out": "kernel8.img"
             }
           ]
         },
         "rootfs": "avocado-image-rootfs-avocado-raspberrypi4.rootfs.squashfs",
-        "var": "avocado-image-var-avocado-raspberrypi4.var.img",
-        "uboot_env": "uboot.env"
+        "var": "avocado-image-var-avocado-raspberrypi4.var.img"
       },
       "partitions": [
         {

@@ -15,12 +15,10 @@ pub struct Runtime {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StorageDevice {
-    pub filename: String,
+    pub out: String,
     pub build: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_conf: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub build_args: Vec<String>,
+    pub build_args: Option<HashMap<String, serde_json::Value>>,
     pub devpath: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_size: Option<u32>,
@@ -33,35 +31,34 @@ pub struct StorageDevice {
 pub enum Image {
     String(String),
     Object {
-        filename: String,
+        out: String,
+        build: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        build: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        build_args: Vec<String>,
+        build_args: Option<HashMap<String, serde_json::Value>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files: Vec<FileEntry>,
     },
 }
 
 impl Image {
-    pub fn filename(&self) -> &str {
+    pub fn out(&self) -> &str {
         match self {
             Image::String(filename) => filename,
-            Image::Object { filename, .. } => filename,
+            Image::Object { out, .. } => out,
         }
     }
 
     pub fn build(&self) -> Option<&String> {
         match self {
             Image::String(_) => None,
-            Image::Object { build, .. } => build.as_ref(),
+            Image::Object { build, .. } => Some(build),
         }
     }
 
-    pub fn build_args(&self) -> &[String] {
+    pub fn build_args(&self) -> Option<&HashMap<String, serde_json::Value>> {
         match self {
-            Image::String(_) => &[],
-            Image::Object { build_args, .. } => build_args,
+            Image::String(_) => None,
+            Image::Object { build_args, .. } => build_args.as_ref(),
         }
     }
 
@@ -118,9 +115,20 @@ pub struct Partition {
 
 impl Manifest {
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read manifest file: {}", e))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            format!(
+                "[ERROR] Failed to read manifest file '{}': {}",
+                path.display(),
+                e
+            )
+        })?;
 
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse manifest JSON: {}", e))
+        serde_json::from_str(&content).map_err(|e| {
+            format!(
+                "[ERROR] Failed to parse manifest JSON '{}': {}",
+                path.display(),
+                e
+            )
+        })
     }
 }

@@ -52,12 +52,15 @@ impl<T: Read + Write + Seek> ReadWriteSeek for T {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FatType {
+    #[allow(dead_code)]
     Fat12,
+    #[allow(dead_code)]
     Fat16,
     Fat32,
 }
 
 impl FatType {
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "fat12" => Ok(FatType::Fat12),
@@ -135,6 +138,7 @@ impl FatImageOptions {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_label<S: Into<String>>(mut self, label: S) -> Self {
         self.label = label.into();
         self

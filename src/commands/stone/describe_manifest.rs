@@ -1,8 +1,27 @@
 use crate::log::*;
 use crate::manifest::Manifest;
+use clap::Args;
 use std::path::PathBuf;
 
-pub fn describe_manifest_command(manifest_path: PathBuf) -> Result<(), String> {
+#[derive(Args, Debug)]
+pub struct DescribeManifestArgs {
+    /// Path to the manifest.json file
+    #[arg(
+        short = 'm',
+        long = "manifest-path",
+        value_name = "PATH",
+        default_value = "manifest.json"
+    )]
+    pub manifest: PathBuf,
+}
+
+impl DescribeManifestArgs {
+    pub fn execute(&self) -> Result<(), String> {
+        describe_manifest_command(&self.manifest)
+    }
+}
+
+pub fn describe_manifest_command(manifest_path: &PathBuf) -> Result<(), String> {
     // Check if manifest file exists
     if !manifest_path.exists() {
         return Err(format!(
@@ -11,7 +30,7 @@ pub fn describe_manifest_command(manifest_path: PathBuf) -> Result<(), String> {
         ));
     }
 
-    let manifest = Manifest::from_file(&manifest_path)?;
+    let manifest = Manifest::from_file(manifest_path)?;
     describe_manifest(&manifest);
     log_success("Described manifest.");
     Ok(())
@@ -67,11 +86,11 @@ fn describe_manifest(manifest: &Manifest) {
             ───────────────────────────────────────────────────────────────────────────────\n\
             Output File    : {}\n\
             Build Type     : {}\n",
-            device_name, device.filename, device.build
+            device_name, device.out, device.build
         ));
 
-        if let Some(build_conf) = &device.build_conf {
-            output.push_str(&format!("Build Config   : {}\n", build_conf));
+        if let Some(build_args) = &device.build_args {
+            output.push_str(&format!("Build Args     : {:?}\n", build_args));
         }
 
         output.push_str(&format!("Device Path    : {}\n", device.devpath));
@@ -88,14 +107,35 @@ fn describe_manifest(manifest: &Manifest) {
         images.sort_by_key(|(name, _)| *name);
 
         for (image_name, image) in images {
-            output.push_str(&format!("\n  • {} → {}\n", image_name, image.filename()));
+            output.push_str(&format!("\n  • {} → {}\n", image_name, image.out()));
 
             if let Some(build) = image.build() {
                 output.push_str(&format!("    Build: {}\n", build));
+
+                // Show build_args if present
+                if let Some(build_args) = image.build_args() {
+                    output.push_str("    Build Args:\n");
+                    for (key, value) in build_args {
+                        output.push_str(&format!("      {}: {}\n", key, value));
+                    }
+                }
             }
 
             if !image.files().is_empty() {
-                output.push_str(&format!("    Files: {}\n", image.files().len()));
+                output.push_str(&format!("    Files ({}):\n", image.files().len()));
+                for file_entry in image.files() {
+                    match file_entry {
+                        crate::manifest::FileEntry::String(filename) => {
+                            output.push_str(&format!("      {}\n", filename));
+                        }
+                        crate::manifest::FileEntry::Object {
+                            input,
+                            output: file_output,
+                        } => {
+                            output.push_str(&format!("      {} → {}\n", input, file_output));
+                        }
+                    }
+                }
             }
         }
 
@@ -124,6 +164,14 @@ fn describe_manifest(manifest: &Manifest) {
                 size,
                 special
             ));
+        }
+
+        // Show storage device build information
+        if let Some(build_args) = &device.build_args {
+            output.push_str(&format!("\nStorage Device Build Args:\n"));
+            for (key, value) in build_args {
+                output.push_str(&format!("  {}: {}\n", key, value));
+            }
         }
     }
 
