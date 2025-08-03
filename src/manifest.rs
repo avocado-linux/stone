@@ -16,7 +16,8 @@ pub struct Runtime {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StorageDevice {
     pub out: String,
-    pub build: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_args: Option<HashMap<String, serde_json::Value>>,
     pub devpath: String,
@@ -32,9 +33,14 @@ pub enum Image {
     String(String),
     Object {
         out: String,
-        build: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        build: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         build_args: Option<HashMap<String, serde_json::Value>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size_unit: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files: Vec<FileEntry>,
     },
@@ -48,10 +54,14 @@ impl Image {
         }
     }
 
-    pub fn build(&self) -> Option<&String> {
+    pub fn build(&self) -> Option<String> {
         match self {
             Image::String(_) => None,
-            Image::Object { build, .. } => Some(build),
+            Image::Object { build_args, .. } => build_args
+                .as_ref()
+                .and_then(|args| args.get("type"))
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string()),
         }
     }
 
@@ -66,6 +76,13 @@ impl Image {
         match self {
             Image::String(_) => &[],
             Image::Object { files, .. } => files,
+        }
+    }
+
+    pub fn size(&self) -> Option<i64> {
+        match self {
+            Image::String(_) => None,
+            Image::Object { size, .. } => *size,
         }
     }
 }

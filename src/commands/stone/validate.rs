@@ -79,15 +79,15 @@ pub fn validate_command(manifest_path: &PathBuf, input_dir: &PathBuf) -> Result<
 
             // Validate build_args for different build types
             if let Some(build_type) = image.build() {
-                if let Some(build_args) = image.build_args() {
+                if let Some(_build_args) = image.build_args() {
                     match build_type.as_str() {
                         "fat" => {
                             // Check if size is specified for FAT builds
-                            if !build_args.contains_key("size") {
+                            if image.size().is_none() {
                                 missing_files.push((
                                     device_name.clone(),
                                     image_name.clone(),
-                                    "build_args.size (required for FAT builds)".to_string(),
+                                    "size (required for FAT builds)".to_string(),
                                 ));
                             }
                         }
@@ -114,11 +114,7 @@ pub fn validate_command(manifest_path: &PathBuf, input_dir: &PathBuf) -> Result<
                     missing_files.push((
                         device_name.clone(),
                         image_name.clone(),
-                        format!(
-                            "{} -> {}",
-                            file_entry.input_filename(),
-                            file_entry.output_filename()
-                        ),
+                        file_entry.input_filename().to_string(),
                     ));
                 }
             }

@@ -81,12 +81,19 @@ fn describe_manifest(manifest: &Manifest) {
 
     // Storage devices
     for (device_name, device) in &manifest.storage_devices {
+        let build_type = device
+            .build_args
+            .as_ref()
+            .and_then(|args| args.get("type"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("none");
+
         output.push_str(&format!(
             "\nStorage Device: {}\n\
             ───────────────────────────────────────────────────────────────────────────────\n\
             Output File    : {}\n\
             Build Type     : {}\n",
-            device_name, device.out, device.build
+            device_name, device.out, build_type
         ));
 
         if let Some(build_args) = &device.build_args {

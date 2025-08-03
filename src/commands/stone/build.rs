@@ -81,9 +81,16 @@ pub fn build_command(
 
     // Process each storage device
     for (device_name, device) in &manifest.storage_devices {
+        let build_type = device
+            .build_args
+            .as_ref()
+            .and_then(|args| args.get("type"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("none");
+
         log_info(&format!(
             "Processing storage device '{}' with build type '{}'.",
-            device_name, device.build
+            device_name, build_type
         ));
 
         // Process each image in the device
@@ -323,7 +330,6 @@ fn build_fwup(
     image: &crate::manifest::Image,
     verbose: bool,
 ) -> Result<(), String> {
-    println!("ATLANTIS WHOA");
     // Create output directory if it doesn't exist
     if let Some(parent) = output_path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {

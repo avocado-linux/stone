@@ -1,0 +1,49 @@
+{
+  "runtime": {
+    "platform": "avocado-target",
+    "architecture": "arm64"
+  },
+  "storage_devices": {
+    "rootdisk": {
+      "out": "rootdisk_1",
+      "build_args": {
+        "type": "fwup",
+        "template": "template_1"
+      },
+      "devpath": "/dev/mmcblk0",
+      "block_size": 512,
+      "images": {
+        "image_1": {
+          "out": "image_1",
+          "size": 128,
+          "size_unit": "mebibytes",
+          "build_args": {
+            "type": "fat",
+            "variant": "FAT32",
+            "files": [
+              "file_1",
+              {
+                "in": "file_2",
+                "out": "foo/file_2"
+              }
+            ]
+          }
+        },
+        "image_2": "image_2"
+      },
+      "partitions": [
+        {
+          "image": "image_1",
+          "offset": 2048,
+          "offset_unit": "bytes",
+          "size": 256,
+          "size_unit": "blocks"
+        },
+        {
+          "image": "image_2",
+          "expand": "true"
+        }
+      ]
+    }
+  }
+}
