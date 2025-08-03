@@ -52,8 +52,8 @@ impl BuildArgs {
 }
 
 pub fn build_command(
-    manifest_path: &PathBuf,
-    input_dir: &PathBuf,
+    manifest_path: &Path,
+    input_dir: &Path,
     output_dir: &PathBuf,
     verbose: bool,
 ) -> Result<(), String> {
@@ -89,8 +89,7 @@ pub fn build_command(
             .unwrap_or("none");
 
         log_info(&format!(
-            "Processing storage device '{}' with build type '{}'.",
-            device_name, build_type
+            "Processing storage device '{device_name}' with build type '{build_type}'."
         ));
 
         // Process each image in the device
@@ -104,8 +103,7 @@ pub fn build_command(
                 verbose,
             ) {
                 errors.push(format!(
-                    "Failed to process image '{}' in device '{}': {}",
-                    image_name, device_name, e
+                    "Failed to process image '{image_name}' in device '{device_name}': {e}"
                 ));
             }
         }
@@ -115,7 +113,7 @@ pub fn build_command(
     if !errors.is_empty() {
         let mut error_msg = String::from("Build failed with the following errors:");
         for error in errors {
-            error_msg.push_str(&format!("\n  - {}", error));
+            error_msg.push_str(&format!("\n  - {error}"));
         }
         return Err(error_msg);
     }
@@ -139,8 +137,7 @@ fn process_image(
     };
 
     log_info(&format!(
-        "Processing image '{}' with build type '{}'.",
-        image_name, build_type_name
+        "Processing image '{image_name}' with build type '{build_type_name}'."
     ));
 
     // Handle both string and object image types
@@ -157,8 +154,7 @@ fn process_image(
             "fat" => build_fat(&input_path, &output_path, image, verbose),
             "fwup" => build_fwup(&input_path, &output_path, image, verbose),
             _ => Err(format!(
-                "Unsupported build type '{}' for image '{}'.",
-                build_type, image_name
+                "Unsupported build type '{build_type}' for image '{image_name}'."
             )),
         },
         None => {
@@ -229,10 +225,10 @@ fn build_fat(
     // Create a temporary manifest file for the fat module
     let temp_manifest_path = output_path.with_extension("manifest.json");
     let manifest_json = serde_json::to_string_pretty(&fat_manifest)
-        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
+        .map_err(|e| format!("Failed to serialize manifest: {e}"))?;
 
     fs::write(&temp_manifest_path, manifest_json)
-        .map_err(|e| format!("Failed to write temporary manifest: {}", e))?;
+        .map_err(|e| format!("Failed to write temporary manifest: {e}"))?;
 
     // Determine size from build_args or use default
     let size_mb = extract_size_from_build_args(image.build_args()).unwrap_or(32);
@@ -259,7 +255,7 @@ fn build_fat(
             }
             Ok(())
         }
-        Err(e) => Err(format!("Failed to create FAT image: {}", e)),
+        Err(e) => Err(format!("Failed to create FAT image: {e}")),
     }
 }
 
@@ -400,7 +396,7 @@ fn build_fwup(
                         .to_string(),
                 )
             } else {
-                Err(format!("Failed to execute fwup command: {}", e))
+                Err(format!("Failed to execute fwup command: {e}"))
             }
         }
     }

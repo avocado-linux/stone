@@ -2,7 +2,7 @@ use crate::log::*;
 use crate::manifest::Manifest;
 use clap::Args;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
 pub struct ValidateArgs {
@@ -31,7 +31,7 @@ impl ValidateArgs {
     }
 }
 
-pub fn validate_command(manifest_path: &PathBuf, input_dir: &PathBuf) -> Result<(), String> {
+pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), String> {
     // Check if manifest file exists
     if !manifest_path.exists() {
         return Err(format!(
@@ -101,7 +101,7 @@ pub fn validate_command(manifest_path: &PathBuf, input_dir: &PathBuf) -> Result<
                     missing_files.push((
                         device_name.clone(),
                         image_name.clone(),
-                        format!("build_args (required for {} builds)", build_type),
+                        format!("build_args (required for {build_type} builds)"),
                     ));
                 }
             }
@@ -131,16 +131,13 @@ pub fn validate_command(manifest_path: &PathBuf, input_dir: &PathBuf) -> Result<
         // Group missing files by device and image
         let mut grouped: HashMap<(String, String), Vec<String>> = HashMap::new();
         for (device, image, filename) in missing_files {
-            grouped
-                .entry((device, image))
-                .or_insert(Vec::new())
-                .push(filename);
+            grouped.entry((device, image)).or_default().push(filename);
         }
 
         for ((device, image), filenames) in grouped {
-            error_msg.push_str(&format!("\n  device: {}, image: {}", device, image));
+            error_msg.push_str(&format!("\n  device: {device}, image: {image}"));
             for filename in filenames {
-                error_msg.push_str(&format!("\n    {}", filename));
+                error_msg.push_str(&format!("\n    {filename}"));
             }
         }
 

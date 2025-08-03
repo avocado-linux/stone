@@ -8,7 +8,7 @@ fn test_build() {
 
     Command::cargo_bin("stone")
         .unwrap()
-        .args(&[
+        .args([
             "build",
             "--manifest-path",
             "tests/fixtures/coverage/manifest.json",

@@ -1,7 +1,7 @@
 use crate::log::*;
 use crate::manifest::Manifest;
 use clap::Args;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
 pub struct DescribeManifestArgs {
@@ -21,7 +21,7 @@ impl DescribeManifestArgs {
     }
 }
 
-pub fn describe_manifest_command(manifest_path: &PathBuf) -> Result<(), String> {
+pub fn describe_manifest_command(manifest_path: &Path) -> Result<(), String> {
     // Check if manifest file exists
     if !manifest_path.exists() {
         return Err(format!(
@@ -40,19 +40,19 @@ pub fn describe_manifest_command(manifest_path: &PathBuf) -> Result<(), String> 
 fn format_size_display(size: Option<i64>, size_unit: Option<&String>) -> String {
     match (size, size_unit) {
         (Some(size_val), Some(unit)) => match unit.as_str() {
-            "bytes" => format!("{} bytes", size_val),
-            "kibibytes" => format!("{} KiB", size_val),
-            "mebibytes" => format!("{} MiB", size_val),
-            "gibibytes" => format!("{} GiB", size_val),
-            "tebibytes" => format!("{} TiB", size_val),
-            "kilobytes" => format!("{} KB", size_val),
-            "megabytes" => format!("{} MB", size_val),
-            "gigabytes" => format!("{} GB", size_val),
-            "terabytes" => format!("{} TB", size_val),
-            "blocks" => format!("{} blocks", size_val),
-            _ => format!("{} {}", size_val, unit),
+            "bytes" => format!("{size_val} bytes"),
+            "kibibytes" => format!("{size_val} KiB"),
+            "mebibytes" => format!("{size_val} MiB"),
+            "gibibytes" => format!("{size_val} GiB"),
+            "tebibytes" => format!("{size_val} TiB"),
+            "kilobytes" => format!("{size_val} KB"),
+            "megabytes" => format!("{size_val} MB"),
+            "gigabytes" => format!("{size_val} GB"),
+            "terabytes" => format!("{size_val} TB"),
+            "blocks" => format!("{size_val} blocks"),
+            _ => format!("{size_val} {unit}"),
         },
-        (Some(size_val), None) => format!("{}", size_val),
+        (Some(size_val), None) => format!("{size_val}"),
         _ => "-".to_string(),
     }
 }
@@ -60,11 +60,11 @@ fn format_size_display(size: Option<i64>, size_unit: Option<&String>) -> String 
 fn format_offset_display(offset: Option<i64>, offset_unit: Option<&String>) -> String {
     match (offset, offset_unit) {
         (Some(offset_val), Some(unit)) => match unit.as_str() {
-            "bytes" => format!("{}", offset_val),
-            "blocks" => format!("{}*blocks", offset_val),
-            _ => format!("{} {}", offset_val, unit),
+            "bytes" => format!("{offset_val}"),
+            "blocks" => format!("{offset_val}*blocks"),
+            _ => format!("{offset_val} {unit}"),
         },
-        (Some(offset_val), None) => format!("{}", offset_val),
+        (Some(offset_val), None) => format!("{offset_val}"),
         _ => "-".to_string(),
     }
 }
@@ -97,13 +97,13 @@ fn describe_manifest(manifest: &Manifest) {
         ));
 
         if let Some(build_args) = &device.build_args {
-            output.push_str(&format!("Build Args     : {:?}\n", build_args));
+            output.push_str(&format!("Build Args     : {build_args:?}\n"));
         }
 
         output.push_str(&format!("Device Path    : {}\n", device.devpath));
 
         if let Some(block_size) = device.block_size {
-            output.push_str(&format!("Block Size     : {}\n", block_size));
+            output.push_str(&format!("Block Size     : {block_size}\n"));
         }
 
         // Images section
@@ -117,13 +117,13 @@ fn describe_manifest(manifest: &Manifest) {
             output.push_str(&format!("\n  • {} → {}\n", image_name, image.out()));
 
             if let Some(build) = image.build() {
-                output.push_str(&format!("    Build: {}\n", build));
+                output.push_str(&format!("    Build: {build}\n"));
 
                 // Show build_args if present
                 if let Some(build_args) = image.build_args() {
                     output.push_str("    Build Args:\n");
                     for (key, value) in build_args {
-                        output.push_str(&format!("      {}: {}\n", key, value));
+                        output.push_str(&format!("      {key}: {value}\n"));
                     }
                 }
             }
@@ -133,13 +133,13 @@ fn describe_manifest(manifest: &Manifest) {
                 for file_entry in image.files() {
                     match file_entry {
                         crate::manifest::FileEntry::String(filename) => {
-                            output.push_str(&format!("      {}\n", filename));
+                            output.push_str(&format!("      {filename}\n"));
                         }
                         crate::manifest::FileEntry::Object {
                             input,
                             output: file_output,
                         } => {
-                            output.push_str(&format!("      {} → {}\n", input, file_output));
+                            output.push_str(&format!("      {input} → {file_output}\n"));
                         }
                     }
                 }
@@ -175,9 +175,9 @@ fn describe_manifest(manifest: &Manifest) {
 
         // Show storage device build information
         if let Some(build_args) = &device.build_args {
-            output.push_str(&format!("\nStorage Device Build Args:\n"));
+            output.push_str("\nStorage Device Build Args:\n");
             for (key, value) in build_args {
-                output.push_str(&format!("  {}: {}\n", key, value));
+                output.push_str(&format!("  {key}: {value}\n"));
             }
         }
     }
@@ -186,5 +186,5 @@ fn describe_manifest(manifest: &Manifest) {
         "═══════════════════════════════════════════════════════════════════════════════",
     );
 
-    println!("{}", output);
+    println!("{output}");
 }

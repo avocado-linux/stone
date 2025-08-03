@@ -50,12 +50,13 @@ use serde::Deserialize;
 trait ReadWriteSeek: Read + Write + Seek {}
 impl<T: Read + Write + Seek> ReadWriteSeek for T {}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum FatType {
     #[allow(dead_code)]
     Fat12,
     #[allow(dead_code)]
     Fat16,
+    #[default]
     Fat32,
 }
 
@@ -66,14 +67,8 @@ impl FatType {
             "fat12" => Ok(FatType::Fat12),
             "fat16" => Ok(FatType::Fat16),
             "fat32" => Ok(FatType::Fat32),
-            _ => Err(format!("Invalid FAT type: {}", s)),
+            _ => Err(format!("Invalid FAT type: {s}")),
         }
-    }
-}
-
-impl Default for FatType {
-    fn default() -> Self {
-        FatType::Fat32
     }
 }
 
@@ -159,7 +154,7 @@ pub fn create_fat_image(options: &FatImageOptions) -> Result<(), String> {
     let mut base_path = options.base_path.clone();
     if base_path.is_relative() {
         base_path = std::env::current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?
+            .map_err(|e| format!("Failed to get current directory: {e}"))?
             .join(&base_path);
     }
 
@@ -176,7 +171,7 @@ pub fn create_fat_image(options: &FatImageOptions) -> Result<(), String> {
     })?;
 
     let manifest: Manifest = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse manifest file: {}", e))?;
+        .map_err(|e| format!("Failed to parse manifest file: {e}"))?;
 
     if options.verbose {
         println!("Generating FAT image: {}", options.output_path.display());
@@ -213,7 +208,7 @@ fn generate_fat_image(
 
     img_file
         .set_len(options.size_mb * 1024 * 1024)
-        .map_err(|e| format!("Failed to set image size: {}", e))?;
+        .map_err(|e| format!("Failed to set image size: {e}"))?;
 
     // Keep the file in a box to satisfy the 'static lifetime requirement
     let mut boxed_file: Box<dyn ReadWriteSeek> = Box::new(img_file);
@@ -234,23 +229,23 @@ fn generate_fat_image(
         .fat_type(fat_type);
 
     fatfs::format_volume(&mut boxed_file, format_options)
-        .map_err(|e| format!("Failed to format volume: {}", e))?;
+        .map_err(|e| format!("Failed to format volume: {e}"))?;
 
     // Rewind the file for filesystem operations
     boxed_file
         .seek(SeekFrom::Start(0))
-        .map_err(|e| format!("Failed to seek in image file: {}", e))?;
+        .map_err(|e| format!("Failed to seek in image file: {e}"))?;
 
     // Create filesystem
     let fs = fatfs::FileSystem::new(boxed_file, fatfs::FsOptions::new())
-        .map_err(|e| format!("Failed to create filesystem: {}", e))?;
+        .map_err(|e| format!("Failed to create filesystem: {e}"))?;
     let root_dir = fs.root_dir();
 
     // Create directories first
     if let Some(directories) = &manifest.directories {
         for dir_path in directories {
             if options.verbose {
-                println!("Creating directory: {}", dir_path);
+                println!("Creating directory: {dir_path}");
             }
             create_directory_path(&root_dir, dir_path)?;
         }
@@ -268,7 +263,7 @@ fn generate_fat_image(
             .unwrap_or_else(|| entry.filename.as_ref().unwrap());
 
         if options.verbose {
-            println!("Adding file: {} -> {}", input_path, output_path);
+            println!("Adding file: {input_path} -> {output_path}");
         }
 
         add_file_to_fat(&root_dir, base, input_path, output_path)?;
@@ -292,7 +287,7 @@ fn create_directory_path(
         dir = dir
             .create_dir(name)
             .or_else(|_| dir.open_dir(name))
-            .map_err(|e| format!("Failed to create directory '{}': {}", name, e))?;
+            .map_err(|e| format!("Failed to create directory '{name}': {e}"))?;
     }
 
     Ok(())
@@ -325,7 +320,7 @@ fn add_file_to_fat(
         dir = dir
             .create_dir(name)
             .or_else(|_| dir.open_dir(name))
-            .map_err(|e| format!("Failed to create directory '{}': {}", name, e))?;
+            .map_err(|e| format!("Failed to create directory '{name}': {e}"))?;
     }
 
     // Create and write the file
@@ -336,11 +331,11 @@ fn add_file_to_fat(
 
     let mut fat_file = dir
         .create_file(file_name)
-        .map_err(|e| format!("Failed to create file '{}': {}", file_name, e))?;
+        .map_err(|e| format!("Failed to create file '{file_name}': {e}"))?;
 
     fat_file
         .write_all(&file_data)
-        .map_err(|e| format!("Failed to write to file '{}': {}", file_name, e))?;
+        .map_err(|e| format!("Failed to write to file '{file_name}': {e}"))?;
 
     Ok(())
 }

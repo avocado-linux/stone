@@ -106,13 +106,6 @@ impl FileEntry {
             FileEntry::Object { input, .. } => input,
         }
     }
-
-    pub fn output_filename(&self) -> &str {
-        match self {
-            FileEntry::String(filename) => filename,
-            FileEntry::Object { output, .. } => output,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
