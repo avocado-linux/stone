@@ -11,7 +11,7 @@ fn test_build() {
         .args([
             "build",
             "--manifest-path",
-            "tests/fixtures/coverage/manifest.json",
+            "tests/fixtures/coverage/stone.json",
             "--output-dir",
             &output_path.to_string_lossy(),
             "--input-dir",

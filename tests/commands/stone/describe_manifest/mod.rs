@@ -7,7 +7,7 @@ fn test_describe_manifest() {
         .args([
             "describe-manifest",
             "--manifest-path",
-            "tests/fixtures/coverage/manifest.json",
+            "tests/fixtures/coverage/stone.json",
         ])
         .assert()
         .success();

@@ -7,7 +7,7 @@ fn test_validate() {
         .args([
             "validate",
             "--manifest-path",
-            "tests/fixtures/coverage/manifest.json",
+            "tests/fixtures/coverage/stone.json",
             "--input-dir",
             "tests/fixtures/coverage",
         ])
