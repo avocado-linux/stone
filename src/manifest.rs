@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum FatVariant {
-    #[serde(rename = "FAT8")]
-    Fat8,
+    #[serde(rename = "FAT12")]
+    Fat12,
     #[serde(rename = "FAT16")]
     Fat16,
     #[serde(rename = "FAT32")]
@@ -66,6 +66,8 @@ pub struct Manifest {
 pub struct Runtime {
     pub platform: String,
     pub architecture: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provision: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -163,14 +165,20 @@ impl FileEntry {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Partition {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset_unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset_redundant: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset_redundant_unit: Option<String>,
     pub size: i64,
     pub size_unit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -298,5 +306,73 @@ mod tests {
         assert_eq!(fat_args.fat_files().len(), 2);
         assert_eq!(fat_args.fat_files()[0].input_filename(), "file1.txt");
         assert_eq!(fat_args.fat_files()[1].input_filename(), "source.bin");
+    }
+
+    #[test]
+    fn test_runtime_with_provision() {
+        let runtime = Runtime {
+            platform: "linux".to_string(),
+            architecture: "x86_64".to_string(),
+            provision: Some("provision.sh".to_string()),
+        };
+
+        let serialized = serde_json::to_value(&runtime).unwrap();
+        assert_eq!(serialized["platform"], "linux");
+        assert_eq!(serialized["architecture"], "x86_64");
+        assert_eq!(serialized["provision"], "provision.sh");
+
+        let json_str = r#"{"platform":"linux","architecture":"x86_64","provision":"provision.sh"}"#;
+        let deserialized: Runtime = serde_json::from_str(json_str).unwrap();
+        assert_eq!(deserialized.platform, "linux");
+        assert_eq!(deserialized.architecture, "x86_64");
+        assert_eq!(deserialized.provision, Some("provision.sh".to_string()));
+    }
+
+    #[test]
+    fn test_runtime_without_provision() {
+        let runtime = Runtime {
+            platform: "linux".to_string(),
+            architecture: "x86_64".to_string(),
+            provision: None,
+        };
+
+        let serialized = serde_json::to_value(&runtime).unwrap();
+        assert_eq!(serialized["platform"], "linux");
+        assert_eq!(serialized["architecture"], "x86_64");
+        assert!(!serialized.as_object().unwrap().contains_key("provision"));
+
+        let json_str = r#"{"platform":"linux","architecture":"x86_64"}"#;
+        let deserialized: Runtime = serde_json::from_str(json_str).unwrap();
+        assert_eq!(deserialized.platform, "linux");
+        assert_eq!(deserialized.architecture, "x86_64");
+        assert_eq!(deserialized.provision, None);
+    }
+
+    #[test]
+    fn test_partition_with_name_and_redundant_offset() {
+        let json_str = r#"{
+            "name": "uboot-env",
+            "image": "uboot_env",
+            "offset": 1,
+            "offset_unit": "mebibytes",
+            "offset_redundant": 1152,
+            "offset_redundant_unit": "kibibytes",
+            "size": 128,
+            "size_unit": "kibibytes"
+        }"#;
+
+        let partition: Partition = serde_json::from_str(json_str).unwrap();
+
+        assert_eq!(partition.name, Some("uboot-env".to_string()));
+        assert_eq!(partition.image, Some("uboot_env".to_string()));
+        assert_eq!(partition.offset, Some(1));
+        assert_eq!(partition.offset_unit, Some("mebibytes".to_string()));
+        assert_eq!(partition.offset_redundant, Some(1152));
+        assert_eq!(
+            partition.offset_redundant_unit,
+            Some("kibibytes".to_string())
+        );
+        assert_eq!(partition.size, 128);
+        assert_eq!(partition.size_unit, "kibibytes");
     }
 }

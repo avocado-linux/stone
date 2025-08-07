@@ -15,6 +15,10 @@ pub struct CreateArgs {
     )]
     pub manifest: PathBuf,
 
+    /// Path to the OS release file to include
+    #[arg(long = "os-release", value_name = "PATH")]
+    pub os_release: PathBuf,
+
     /// Path to the input directory
     #[arg(
         short = 'i',
@@ -42,6 +46,7 @@ impl CreateArgs {
     pub fn execute(&self) -> Result<(), String> {
         create_command(
             &self.manifest,
+            &self.os_release,
             &self.input_dir,
             &self.output_dir,
             self.verbose,
@@ -51,6 +56,7 @@ impl CreateArgs {
 
 pub fn create_command(
     manifest_path: &Path,
+    os_release_path: &Path,
     input_dir: &Path,
     output_dir: &PathBuf,
     verbose: bool,
@@ -60,6 +66,14 @@ pub fn create_command(
         return Err(format!(
             "Manifest file '{}' not found.",
             manifest_path.display()
+        ));
+    }
+
+    // Check if OS release file exists
+    if !os_release_path.exists() {
+        return Err(format!(
+            "OS release file '{}' not found.",
+            os_release_path.display()
         ));
     }
 
@@ -111,15 +125,33 @@ pub fn create_command(
         }
     }
 
-    // Copy the manifest file to the output directory
-    if let Some(manifest_filename) = manifest_path.file_name() {
-        let output_path = output_dir.join(manifest_filename);
-        if let Err(e) = copy_file(manifest_path, &output_path, verbose) {
+    // Copy the provision file if specified in runtime
+    if let Some(provision_file) = &manifest.runtime.provision {
+        let provision_input_path = input_dir.join(provision_file);
+        let provision_output_path = output_dir.join(provision_file);
+        if let Err(e) = copy_file(&provision_input_path, &provision_output_path, verbose) {
             errors.push(format!(
-                "Failed to copy manifest file '{}': {e}",
-                manifest_path.display()
+                "Failed to copy provision file '{provision_file}': {e}"
             ));
         }
+    }
+
+    // Copy the manifest file to the output directory as manifest.json
+    let manifest_output_path = output_dir.join("manifest.json");
+    if let Err(e) = copy_file(manifest_path, &manifest_output_path, verbose) {
+        errors.push(format!(
+            "Failed to copy manifest file '{}': {e}",
+            manifest_path.display()
+        ));
+    }
+
+    // Copy the OS release file to the output directory as os-release
+    let os_release_output_path = output_dir.join("os-release");
+    if let Err(e) = copy_file(os_release_path, &os_release_output_path, verbose) {
+        errors.push(format!(
+            "Failed to copy OS release file '{}': {e}",
+            os_release_path.display()
+        ));
     }
 
     // Report errors

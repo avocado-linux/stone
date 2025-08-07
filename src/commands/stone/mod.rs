@@ -2,10 +2,12 @@ use clap::Subcommand;
 
 pub mod create;
 pub mod describe_manifest;
+pub mod provision;
 pub mod validate;
 
 use create::CreateArgs;
 use describe_manifest::DescribeManifestArgs;
+use provision::ProvisionArgs;
 use validate::ValidateArgs;
 
 #[derive(Subcommand, Debug)]
@@ -19,4 +21,7 @@ pub enum Commands {
 
     /// Create the artifacts specified in the manifest.
     Create(CreateArgs),
+
+    /// Provision by actually building the artifacts specified in the manifest.
+    Provision(ProvisionArgs),
 }

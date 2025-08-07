@@ -46,6 +46,18 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
     let mut missing_files = Vec::new();
     let mut missing_device_files = Vec::new();
 
+    // Check if provision file exists if specified in runtime
+    if let Some(provision_file) = &manifest.runtime.provision {
+        let provision_path = input_dir.join(provision_file);
+        if !provision_path.exists() {
+            missing_files.push((
+                "runtime".to_string(),
+                "provision".to_string(),
+                provision_file.clone(),
+            ));
+        }
+    }
+
     // Process each storage device
     for (device_name, device) in &manifest.storage_devices {
         // Check fwup template file if device has fwup build args

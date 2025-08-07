@@ -4,6 +4,7 @@ use clap::Parser;
 
 mod commands;
 mod fat;
+mod fwup;
 mod log;
 mod manifest;
 
@@ -29,5 +30,6 @@ fn run() -> Result<(), String> {
         Commands::Validate(args) => args.execute(),
         Commands::DescribeManifest(args) => args.execute(),
         Commands::Create(args) => args.execute(),
+        Commands::Provision(args) => args.execute(),
     }
 }
