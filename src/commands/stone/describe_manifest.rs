@@ -163,10 +163,11 @@ fn describe_manifest(manifest: &Manifest) {
                 ""
             };
 
+            let image_display = partition.image.as_deref().unwrap_or("-");
             output.push_str(&format!(
                 "  {}  {:<11}  {:<11}  {:<13}  {}\n",
                 idx + 1,
-                partition.image,
+                image_display,
                 offset,
                 size,
                 special

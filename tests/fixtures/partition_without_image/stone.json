@@ -1,0 +1,21 @@
+{
+  "runtime": {
+    "platform": "avocado-portable",
+    "architecture": "noarch"
+  },
+  "storage_devices": {
+    "rootdisk": {
+      "out": "rootdisk",
+      "devpath": "/dev/mmcblk0",
+      "images": {},
+      "partitions": [
+        {
+          "offset": 2048,
+          "offset_unit": "bytes",
+          "size": 256,
+          "size_unit": "blocks"
+        }
+      ]
+    }
+  }
+}

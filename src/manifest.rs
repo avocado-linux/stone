@@ -110,7 +110,8 @@ impl FileEntry {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Partition {
-    pub image: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
