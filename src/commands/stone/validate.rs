@@ -62,8 +62,7 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
             if let Some(build_type) = image.build() {
                 if build_type == "fwup" {
                     if let Some(build_args) = image.build_args() {
-                        if let Some(template) = build_args.get("template").and_then(|v| v.as_str())
-                        {
+                        if let Some(template) = build_args.template() {
                             let template_path = input_dir.join(template);
                             if !template_path.exists() {
                                 missing_files.push((

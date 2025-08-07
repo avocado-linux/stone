@@ -1,45 +1,3 @@
-//! FAT filesystem image creation from JSON manifests.
-//!
-//! This module provides functionality to create FAT filesystem images based on
-//! JSON manifest files that describe the files and directories to include.
-//!
-//! # Example
-//!
-//! ```rust
-//! use stone::fat::{FatImageOptions, FatType, create_fat_image};
-//! use std::path::PathBuf;
-//!
-//! let options = FatImageOptions::new()
-//!     .with_manifest_path("files.json")
-//!     .with_base_path("./source")
-//!     .with_output_path("filesystem.img")
-//!     .with_size_mb(32)
-//!     .with_label("MYFS")
-//!     .with_fat_type(FatType::Fat32)
-//!     .with_verbose(true);
-//!
-//! create_fat_image(&options)?;
-//! ```
-//!
-//! # Manifest Format
-//!
-//! The JSON manifest should have the following structure:
-//!
-//! ```json
-//! {
-//!   "directories": ["boot", "config"],
-//!   "files": [
-//!     {
-//!       "filename": "kernel.bin",
-//!       "output": "boot/kernel.bin"
-//!     },
-//!     {
-//!       "filename": "config.txt"
-//!     }
-//!   ]
-//! }
-//! ```
-
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -128,7 +86,7 @@ impl FatImageOptions {
         self
     }
 
-    pub fn with_size_mb(mut self, size_mb: u64) -> Self {
+    pub fn with_size_mebibytes(mut self, size_mb: u64) -> Self {
         self.size_mb = size_mb;
         self
     }

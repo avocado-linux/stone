@@ -2,6 +2,48 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum BuildArgs {
+    #[serde(rename = "fat")]
+    Fat {
+        variant: String,
+        files: Vec<FileEntry>,
+    },
+    #[serde(rename = "fwup")]
+    Fwup { template: String },
+}
+
+impl BuildArgs {
+    pub fn build_type(&self) -> &str {
+        match self {
+            BuildArgs::Fat { .. } => "fat",
+            BuildArgs::Fwup { .. } => "fwup",
+        }
+    }
+
+    pub fn template(&self) -> Option<&str> {
+        match self {
+            BuildArgs::Fwup { template } => Some(template),
+            _ => None,
+        }
+    }
+
+    pub fn variant(&self) -> Option<&str> {
+        match self {
+            BuildArgs::Fat { variant, .. } => Some(variant),
+            _ => None,
+        }
+    }
+
+    pub fn files(&self) -> &[FileEntry] {
+        match self {
+            BuildArgs::Fat { files, .. } => files,
+            _ => &[],
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Manifest {
     pub runtime: Runtime,
     pub storage_devices: HashMap<String, StorageDevice>,
@@ -19,7 +61,7 @@ pub struct StorageDevice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_args: Option<HashMap<String, serde_json::Value>>,
+    pub build_args: Option<BuildArgs>,
     pub devpath: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_size: Option<u32>,
@@ -36,7 +78,7 @@ pub enum Image {
         #[serde(skip_serializing_if = "Option::is_none")]
         build: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        build_args: Option<HashMap<String, serde_json::Value>>,
+        build_args: Option<BuildArgs>,
         #[serde(skip_serializing_if = "Option::is_none")]
         size: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,13 +101,11 @@ impl Image {
             Image::String(_) => None,
             Image::Object { build_args, .. } => build_args
                 .as_ref()
-                .and_then(|args| args.get("type"))
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_string()),
+                .map(|args| args.build_type().to_string()),
         }
     }
 
-    pub fn build_args(&self) -> Option<&HashMap<String, serde_json::Value>> {
+    pub fn build_args(&self) -> Option<&BuildArgs> {
         match self {
             Image::String(_) => None,
             Image::Object { build_args, .. } => build_args.as_ref(),

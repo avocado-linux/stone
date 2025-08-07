@@ -4,6 +4,7 @@ use clap::Parser;
 
 mod commands;
 mod fat;
+mod fwup;
 mod log;
 mod manifest;
 
