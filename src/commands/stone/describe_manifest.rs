@@ -37,23 +37,19 @@ pub fn describe_manifest_command(manifest_path: &Path) -> Result<(), String> {
 }
 
 // Helper function to convert size with units to a display string
-fn format_size_display(size: Option<i64>, size_unit: Option<&String>) -> String {
-    match (size, size_unit) {
-        (Some(size_val), Some(unit)) => match unit.as_str() {
-            "bytes" => format!("{size_val} bytes"),
-            "kibibytes" => format!("{size_val} KiB"),
-            "mebibytes" => format!("{size_val} MiB"),
-            "gibibytes" => format!("{size_val} GiB"),
-            "tebibytes" => format!("{size_val} TiB"),
-            "kilobytes" => format!("{size_val} KB"),
-            "megabytes" => format!("{size_val} MB"),
-            "gigabytes" => format!("{size_val} GB"),
-            "terabytes" => format!("{size_val} TB"),
-            "blocks" => format!("{size_val} blocks"),
-            _ => format!("{size_val} {unit}"),
-        },
-        (Some(size_val), None) => format!("{size_val}"),
-        _ => "-".to_string(),
+fn format_size_display(size: i64, size_unit: &str) -> String {
+    match size_unit {
+        "bytes" => format!("{size} bytes"),
+        "kibibytes" => format!("{size} KiB"),
+        "mebibytes" => format!("{size} MiB"),
+        "gibibytes" => format!("{size} GiB"),
+        "tebibytes" => format!("{size} TiB"),
+        "kilobytes" => format!("{size} KB"),
+        "megabytes" => format!("{size} MB"),
+        "gigabytes" => format!("{size} GB"),
+        "terabytes" => format!("{size} TB"),
+        "blocks" => format!("{size} blocks"),
+        _ => format!("{size} {size_unit}"),
     }
 }
 
@@ -84,8 +80,7 @@ fn describe_manifest(manifest: &Manifest) {
         let build_type = device
             .build_args
             .as_ref()
-            .and_then(|args| args.get("type"))
-            .and_then(|t| t.as_str())
+            .map(|args| args.build_type())
             .unwrap_or("none");
 
         output.push_str(&format!(
@@ -95,10 +90,6 @@ fn describe_manifest(manifest: &Manifest) {
             Build Type     : {}\n",
             device_name, device.out, build_type
         ));
-
-        if let Some(build_args) = &device.build_args {
-            output.push_str(&format!("Build Args     : {build_args:?}\n"));
-        }
 
         output.push_str(&format!("Device Path    : {}\n", device.devpath));
 
@@ -116,21 +107,48 @@ fn describe_manifest(manifest: &Manifest) {
         for (image_name, image) in images {
             output.push_str(&format!("\n  • {} → {}\n", image_name, image.out()));
 
+            // Show size if this is an Object image
+            if let Some(size) = image.size() {
+                if let Some(size_unit) = image.size_unit() {
+                    let size_display = format_size_display(size, size_unit);
+                    output.push_str(&format!("    Size: {size_display}\n"));
+                }
+            }
+
             if let Some(build) = image.build() {
                 output.push_str(&format!("    Build: {build}\n"));
 
                 // Show build_args if present
                 if let Some(build_args) = image.build_args() {
                     output.push_str("    Build Args:\n");
-                    for (key, value) in build_args {
-                        output.push_str(&format!("      {key}: {value}\n"));
+                    output.push_str(&format!("      type: {}\n", build_args.build_type()));
+                    match build_args {
+                        crate::manifest::BuildArgs::Fat { variant, files } => {
+                            output.push_str(&format!("      variant: {variant:?}\n"));
+                            if !files.is_empty() {
+                                output.push_str(&format!("      files: {} file(s)\n", files.len()));
+                            }
+                        }
+                        crate::manifest::BuildArgs::Fwup { template } => {
+                            output.push_str(&format!("      template: \"{template}\"\n"));
+                        }
                     }
                 }
             }
 
-            if !image.files().is_empty() {
-                output.push_str(&format!("    Files ({}):\n", image.files().len()));
-                for file_entry in image.files() {
+            // Show files from build_args for fat builds, otherwise from image
+            let files = if let Some(build_args) = image.build_args() {
+                match build_args {
+                    crate::manifest::BuildArgs::Fat { files, .. } => files.as_slice(),
+                    _ => image.files(),
+                }
+            } else {
+                image.files()
+            };
+
+            if !files.is_empty() {
+                output.push_str(&format!("    Files ({}):\n", files.len()));
+                for file_entry in files {
                     match file_entry {
                         crate::manifest::FileEntry::String(filename) => {
                             output.push_str(&format!("      {filename}\n"));
@@ -156,7 +174,7 @@ fn describe_manifest(manifest: &Manifest) {
 
         for (idx, partition) in device.partitions.iter().enumerate() {
             let offset = format_offset_display(partition.offset, partition.offset_unit.as_ref());
-            let size = format_size_display(partition.size, partition.size_unit.as_ref());
+            let size = format_size_display(partition.size, &partition.size_unit);
             let special = if partition.expand == Some("true".to_string()) {
                 "expandable"
             } else {
@@ -177,8 +195,17 @@ fn describe_manifest(manifest: &Manifest) {
         // Show storage device build information
         if let Some(build_args) = &device.build_args {
             output.push_str("\nStorage Device Build Args:\n");
-            for (key, value) in build_args {
-                output.push_str(&format!("  {key}: {value}\n"));
+            output.push_str(&format!("  type: {}\n", build_args.build_type()));
+            match build_args {
+                crate::manifest::BuildArgs::Fat { variant, files } => {
+                    output.push_str(&format!("  variant: {variant:?}\n"));
+                    if !files.is_empty() {
+                        output.push_str(&format!("  files: {} file(s)\n", files.len()));
+                    }
+                }
+                crate::manifest::BuildArgs::Fwup { template } => {
+                    output.push_str(&format!("  template: \"{template}\"\n"));
+                }
             }
         }
     }

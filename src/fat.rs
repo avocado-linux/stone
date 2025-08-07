@@ -5,20 +5,23 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,no_run
 //! use stone::fat::{FatImageOptions, FatType, create_fat_image};
 //! use std::path::PathBuf;
 //!
-//! let options = FatImageOptions::new()
-//!     .with_manifest_path("files.json")
-//!     .with_base_path("./source")
-//!     .with_output_path("filesystem.img")
-//!     .with_size_mb(32)
-//!     .with_label("MYFS")
-//!     .with_fat_type(FatType::Fat32)
-//!     .with_verbose(true);
+//! fn main() -> Result<(), String> {
+//!     let options = FatImageOptions::new()
+//!         .with_manifest_path("files.json")
+//!         .with_base_path("./source")
+//!         .with_output_path("filesystem.img")
+//!         .with_size_mb(32)
+//!         .with_label("MYFS")
+//!         .with_fat_type(FatType::Fat32)
+//!         .with_verbose(true);
 //!
-//! create_fat_image(&options)?;
+//!     create_fat_image(&options)?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Manifest Format
@@ -43,6 +46,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 
 use serde::Deserialize;
 
@@ -60,9 +64,10 @@ pub enum FatType {
     Fat32,
 }
 
-impl FatType {
-    #[allow(dead_code)]
-    pub fn from_str(s: &str) -> Result<Self, String> {
+impl FromStr for FatType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "fat12" => Ok(FatType::Fat12),
             "fat16" => Ok(FatType::Fat16),
@@ -148,6 +153,67 @@ impl FatImageOptions {
         self.verbose = verbose;
         self
     }
+}
+
+#[allow(dead_code)]
+pub fn list_fat_files(fat_image_path: &Path) -> Result<Vec<String>, String> {
+    let img_file = fs::File::open(fat_image_path).map_err(|e| {
+        format!(
+            "Failed to open FAT image '{}': {}",
+            fat_image_path.display(),
+            e
+        )
+    })?;
+
+    let fs = fatfs::FileSystem::new(img_file, fatfs::FsOptions::new())
+        .map_err(|e| format!("Failed to read FAT filesystem: {e}"))?;
+
+    let root_dir = fs.root_dir();
+    let mut files = Vec::new();
+
+    list_directory_recursive(&root_dir, "", &mut files)?;
+
+    Ok(files)
+}
+
+#[allow(dead_code)]
+pub fn list_directory_recursive(
+    dir: &fatfs::Dir<fs::File>,
+    path_prefix: &str,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
+    for entry in dir.iter() {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {e}"))?;
+        let name = entry.file_name();
+
+        if entry.is_dir() {
+            // Skip "." and ".." entries
+            if name == "." || name == ".." {
+                continue;
+            }
+
+            let subdir = dir
+                .open_dir(&name)
+                .map_err(|e| format!("Failed to open directory '{name}': {e}"))?;
+
+            let new_prefix = if path_prefix.is_empty() {
+                name
+            } else {
+                format!("{path_prefix}/{name}")
+            };
+
+            list_directory_recursive(&subdir, &new_prefix, files)?;
+        } else {
+            let full_path = if path_prefix.is_empty() {
+                name
+            } else {
+                format!("{path_prefix}/{name}")
+            };
+            files.push(full_path);
+        }
+    }
+
+    Ok(())
 }
 
 pub fn create_fat_image(options: &FatImageOptions) -> Result<(), String> {

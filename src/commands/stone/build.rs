@@ -84,8 +84,7 @@ pub fn build_command(
         let build_type = device
             .build_args
             .as_ref()
-            .and_then(|args| args.get("type"))
-            .and_then(|t| t.as_str())
+            .map(|args| args.build_type())
             .unwrap_or("none");
 
         log_info(&format!(
@@ -230,8 +229,8 @@ fn build_fat(
     fs::write(&temp_manifest_path, manifest_json)
         .map_err(|e| format!("Failed to write temporary manifest: {e}"))?;
 
-    // Determine size from build_args or use default
-    let size_mb = extract_size_from_build_args(image.build_args()).unwrap_or(32);
+    // Extract required size from image
+    let size_mb = extract_size_from_image(image)?;
 
     // Create fat image options
     let options = FatImageOptions::new()
@@ -273,7 +272,14 @@ struct FatFileEntry {
 fn create_fat_manifest(image: &crate::manifest::Image) -> Result<FatManifest, String> {
     let mut fat_files = Vec::new();
 
-    for file_entry in image.files() {
+    // Get files from build_args for fat builds
+    let files = if let Some(build_args) = image.build_args() {
+        build_args.fat_files()
+    } else {
+        &[]
+    };
+
+    for file_entry in files {
         let fat_entry = match file_entry {
             crate::manifest::FileEntry::String(filename) => FatFileEntry {
                 filename: Some(filename.clone()),
@@ -290,34 +296,31 @@ fn create_fat_manifest(image: &crate::manifest::Image) -> Result<FatManifest, St
     Ok(FatManifest { files: fat_files })
 }
 
-fn extract_size_from_build_args(
-    build_args: Option<&std::collections::HashMap<String, serde_json::Value>>,
-) -> Option<u64> {
-    if let Some(args) = build_args {
-        if let Some(size_value) = args.get("size") {
-            if let Some(size_num) = size_value.as_u64() {
-                // Check for size_unit and convert to MB
-                let size_unit = args
-                    .get("size_unit")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("megabytes");
+fn extract_size_from_image(image: &crate::manifest::Image) -> Result<u64, String> {
+    match image {
+        crate::manifest::Image::String(_) => Err(
+            "FAT image build requires an object-type image with size specification.".to_string(),
+        ),
+        crate::manifest::Image::Object {
+            size, size_unit, ..
+        } => {
+            let size_num =
+                u64::try_from(*size).map_err(|_| format!("Invalid size value: {size}"))?;
 
-                return Some(match size_unit {
-                    "bytes" => size_num / (1024 * 1024),
-                    "kibibytes" => size_num / 1024,
-                    "mebibytes" => size_num,
-                    "gibibytes" => size_num * 1024,
-                    "tebibytes" => size_num * 1024 * 1024,
-                    "kilobytes" => (size_num * 1000) / (1024 * 1024),
-                    "megabytes" => (size_num * 1000 * 1000) / (1024 * 1024),
-                    "gigabytes" => (size_num * 1000 * 1000 * 1000) / (1024 * 1024),
-                    "terabytes" => (size_num * 1000 * 1000 * 1000 * 1000) / (1024 * 1024),
-                    _ => size_num, // Default to assuming megabytes
-                });
+            match size_unit.as_str() {
+                "bytes" => Ok(size_num / (1024 * 1024)),
+                "kibibytes" => Ok(size_num / 1024),
+                "mebibytes" => Ok(size_num),
+                "gibibytes" => Ok(size_num * 1024),
+                "tebibytes" => Ok(size_num * 1024 * 1024),
+                "kilobytes" => Ok((size_num * 1000) / (1024 * 1024)),
+                "megabytes" => Ok((size_num * 1000 * 1000) / (1024 * 1024)),
+                "gigabytes" => Ok((size_num * 1000 * 1000 * 1000) / (1024 * 1024)),
+                "terabytes" => Ok((size_num * 1000 * 1000 * 1000 * 1000) / (1024 * 1024)),
+                _ => Err(format!("Unsupported size unit: '{size_unit}'")),
             }
         }
     }
-    None
 }
 
 fn build_fwup(
@@ -340,9 +343,8 @@ fn build_fwup(
     // Extract template from build_args
     let template = image
         .build_args()
-        .and_then(|args| args.get("template"))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "fwup build requires 'template' in build_args.".to_string())?;
+        .and_then(|args| args.fwup_template())
+        .ok_or_else(|| "fwup build requires BuildArgs::Fwup with template.".to_string())?;
 
     let template_path = input_path.join(template);
 

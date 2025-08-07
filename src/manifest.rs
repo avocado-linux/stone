@@ -1,10 +1,57 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum FatVariant {
+    #[serde(rename = "FAT8")]
+    Fat8,
+    #[serde(rename = "FAT16")]
+    Fat16,
+    #[serde(rename = "FAT32")]
+    Fat32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum BuildArgs {
+    #[serde(rename = "fat")]
+    Fat {
+        variant: FatVariant,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<FileEntry>,
+    },
+    #[serde(rename = "fwup")]
+    Fwup {
+        template: String, // Path to template file
+    },
+}
+
+impl BuildArgs {
+    pub fn build_type(&self) -> &str {
+        match self {
+            BuildArgs::Fat { .. } => "fat",
+            BuildArgs::Fwup { .. } => "fwup",
+        }
+    }
+
+    pub fn fwup_template(&self) -> Option<&str> {
+        match self {
+            BuildArgs::Fwup { template } => Some(template),
+            _ => None,
+        }
+    }
+
+    pub fn fat_files(&self) -> &[FileEntry] {
+        match self {
+            BuildArgs::Fat { files, .. } => files,
+            _ => &[],
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Manifest {
     pub runtime: Runtime,
-    pub storage_devices: HashMap<String, StorageDevice>,
+    pub storage_devices: std::collections::HashMap<String, StorageDevice>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -17,13 +64,11 @@ pub struct Runtime {
 pub struct StorageDevice {
     pub out: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub build: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_args: Option<HashMap<String, serde_json::Value>>,
+    pub build_args: Option<BuildArgs>,
     pub devpath: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_size: Option<u32>,
-    pub images: HashMap<String, Image>,
+    pub images: std::collections::HashMap<String, Image>,
     pub partitions: Vec<Partition>,
 }
 
@@ -34,13 +79,9 @@ pub enum Image {
     Object {
         out: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        build: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        build_args: Option<HashMap<String, serde_json::Value>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size: Option<i64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        size_unit: Option<String>,
+        build_args: Option<BuildArgs>,
+        size: i64,
+        size_unit: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files: Vec<FileEntry>,
     },
@@ -59,13 +100,11 @@ impl Image {
             Image::String(_) => None,
             Image::Object { build_args, .. } => build_args
                 .as_ref()
-                .and_then(|args| args.get("type"))
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_string()),
+                .map(|args| args.build_type().to_string()),
         }
     }
 
-    pub fn build_args(&self) -> Option<&HashMap<String, serde_json::Value>> {
+    pub fn build_args(&self) -> Option<&BuildArgs> {
         match self {
             Image::String(_) => None,
             Image::Object { build_args, .. } => build_args.as_ref(),
@@ -82,7 +121,14 @@ impl Image {
     pub fn size(&self) -> Option<i64> {
         match self {
             Image::String(_) => None,
-            Image::Object { size, .. } => *size,
+            Image::Object { size, .. } => Some(*size),
+        }
+    }
+
+    pub fn size_unit(&self) -> Option<&str> {
+        match self {
+            Image::String(_) => None,
+            Image::Object { size_unit, .. } => Some(size_unit),
         }
     }
 }
@@ -116,10 +162,8 @@ pub struct Partition {
     pub offset: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset_unit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size_unit: Option<String>,
+    pub size: i64,
+    pub size_unit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expand: Option<String>,
 }
@@ -141,5 +185,110 @@ impl Manifest {
                 e
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_args_serialization() {
+        let fat_args = BuildArgs::Fat {
+            variant: FatVariant::Fat32,
+            files: vec![],
+        };
+
+        let serialized = serde_json::to_value(&fat_args).unwrap();
+        assert_eq!(serialized["type"], "fat");
+        assert_eq!(serialized["variant"], "FAT32");
+    }
+
+    #[test]
+    fn test_build_args_deserialization() {
+        let json_str = r#"{"type":"fwup","template":"my_template.conf"}"#;
+        let deserialized: BuildArgs = serde_json::from_str(json_str).unwrap();
+
+        match deserialized {
+            BuildArgs::Fwup { template } => {
+                assert_eq!(template, "my_template.conf");
+            }
+            _ => panic!("Expected Fwup variant"),
+        }
+    }
+
+    #[test]
+    fn test_build_args_type_access() {
+        let fat_args = BuildArgs::Fat {
+            variant: FatVariant::Fat16,
+            files: vec![],
+        };
+        assert_eq!(fat_args.build_type(), "fat");
+
+        let fwup_args = BuildArgs::Fwup {
+            template: "config.conf".to_string(),
+        };
+        assert_eq!(fwup_args.build_type(), "fwup");
+    }
+
+    #[test]
+    fn test_image_build_method() {
+        let image = Image::Object {
+            out: "test.img".to_string(),
+            build_args: Some(BuildArgs::Fat {
+                variant: FatVariant::Fat32,
+                files: vec![],
+            }),
+            size: 100,
+            size_unit: "megabytes".to_string(),
+            files: vec![],
+        };
+
+        assert_eq!(image.build().unwrap(), "fat");
+
+        let string_image = Image::String("simple.img".to_string());
+        assert!(string_image.build().is_none());
+    }
+
+    #[test]
+    fn test_storage_device_with_build_args() {
+        let json_str = r#"{
+            "out": "disk.img",
+            "devpath": "/dev/sda",
+            "build_args": {
+                "type": "fwup",
+                "template": "config.conf"
+            },
+            "images": {},
+            "partitions": []
+        }"#;
+
+        let device: StorageDevice = serde_json::from_str(json_str).unwrap();
+
+        assert_eq!(device.out, "disk.img");
+        assert_eq!(device.devpath, "/dev/sda");
+
+        let build_args = device.build_args.unwrap();
+        assert_eq!(build_args.build_type(), "fwup");
+        assert_eq!(build_args.fwup_template().unwrap(), "config.conf");
+    }
+
+    #[test]
+    fn test_fat_build_args_with_files() {
+        let fat_args = BuildArgs::Fat {
+            variant: FatVariant::Fat32,
+            files: vec![
+                FileEntry::String("file1.txt".to_string()),
+                FileEntry::Object {
+                    input: "source.bin".to_string(),
+                    output: "dest.bin".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(fat_args.build_type(), "fat");
+        assert_eq!(fat_args.fat_files().len(), 2);
+        assert_eq!(fat_args.fat_files()[0].input_filename(), "file1.txt");
+        assert_eq!(fat_args.fat_files()[1].input_filename(), "source.bin");
     }
 }

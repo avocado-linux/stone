@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use stone::fat::list_fat_files;
 use tempfile::TempDir;
 
 #[test]
@@ -20,8 +21,25 @@ fn test_build() {
         .assert()
         .success();
 
+    // Check that the images were created
     assert!(output_path.join("image_1").exists());
     assert!(output_path.join("image_2").exists());
+
+    // Check that the FAT image contains the expected files
+    let fat_image_path = output_path.join("image_1");
+    let fat_files = list_fat_files(&fat_image_path).expect("Failed to list FAT files");
+
+    // The manifest specifies these files should be in the FAT image:
+    // - "file_1" (direct mapping)
+    // - "file_2" -> "foo/file_2" (mapped to subdirectory)
+    assert!(
+        fat_files.contains(&"file_1".to_string()),
+        "FAT image should contain file_1, found files: {fat_files:?}"
+    );
+    assert!(
+        fat_files.contains(&"foo/file_2".to_string()),
+        "FAT image should contain foo/file_2, found files: {fat_files:?}"
+    );
 }
 
 #[test]

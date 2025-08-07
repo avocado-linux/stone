@@ -62,8 +62,7 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
             if let Some(build_type) = image.build() {
                 if build_type == "fwup" {
                     if let Some(build_args) = image.build_args() {
-                        if let Some(template) = build_args.get("template").and_then(|v| v.as_str())
-                        {
+                        if let Some(template) = build_args.fwup_template() {
                             let template_path = input_dir.join(template);
                             if !template_path.exists() {
                                 missing_files.push((
@@ -82,14 +81,7 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
                 if let Some(_build_args) = image.build_args() {
                     match build_type.as_str() {
                         "fat" => {
-                            // Check if size is specified for FAT builds
-                            if image.size().is_none() {
-                                missing_files.push((
-                                    device_name.clone(),
-                                    image_name.clone(),
-                                    "size (required for FAT builds)".to_string(),
-                                ));
-                            }
+                            // Size is now required in the manifest structure
                         }
                         "fwup" => {
                             // Template is already checked above
@@ -106,8 +98,17 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
                 }
             }
 
-            // Process each file in the image's files array
-            for file_entry in image.files() {
+            // Process files from build_args for fat builds, otherwise from image
+            let files = if let Some(build_args) = image.build_args() {
+                match build_args {
+                    crate::manifest::BuildArgs::Fat { files, .. } => files.as_slice(),
+                    _ => image.files(),
+                }
+            } else {
+                image.files()
+            };
+
+            for file_entry in files {
                 let file_path = input_dir.join(file_entry.input_filename());
 
                 if !file_path.exists() {

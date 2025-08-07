@@ -41,6 +41,8 @@
         },
         {
           "image": "image_2",
+          "size": 1024,
+          "size_unit": "mebibytes",
           "expand": "true"
         }
       ]
