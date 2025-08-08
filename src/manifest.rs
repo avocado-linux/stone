@@ -40,10 +40,18 @@ impl BuildArgs {
         }
     }
 
+    #[allow(dead_code)]
     pub fn fat_files(&self) -> &[FileEntry] {
         match self {
             BuildArgs::Fat { files, .. } => files,
             _ => &[],
+        }
+    }
+
+    pub fn fat_variant(&self) -> Option<&FatVariant> {
+        match self {
+            BuildArgs::Fat { variant, .. } => Some(variant),
+            _ => None,
         }
     }
 }
@@ -82,8 +90,6 @@ pub enum Image {
         build_args: Option<BuildArgs>,
         size: i64,
         size_unit: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        files: Vec<FileEntry>,
     },
 }
 
@@ -114,7 +120,10 @@ impl Image {
     pub fn files(&self) -> &[FileEntry] {
         match self {
             Image::String(_) => &[],
-            Image::Object { files, .. } => files,
+            Image::Object { build_args, .. } => build_args
+                .as_ref()
+                .map(|args| args.fat_files())
+                .unwrap_or(&[]),
         }
     }
 
@@ -241,7 +250,6 @@ mod tests {
             }),
             size: 100,
             size_unit: "megabytes".to_string(),
-            files: vec![],
         };
 
         assert_eq!(image.build().unwrap(), "fat");

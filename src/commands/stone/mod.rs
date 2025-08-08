@@ -1,10 +1,10 @@
 use clap::Subcommand;
 
-pub mod build;
+pub mod create;
 pub mod describe_manifest;
 pub mod validate;
 
-use build::BuildArgs;
+use create::CreateArgs;
 use describe_manifest::DescribeManifestArgs;
 use validate::ValidateArgs;
 
@@ -17,6 +17,6 @@ pub enum Commands {
     /// Check if the manifest's inputs are satisfied.
     Validate(ValidateArgs),
 
-    /// Build the artifacts specified in the manifest.
-    Build(BuildArgs),
+    /// Create the artifacts specified in the manifest.
+    Create(CreateArgs),
 }

@@ -1,56 +1,12 @@
-//! FAT filesystem image creation from JSON manifests.
-//!
-//! This module provides functionality to create FAT filesystem images based on
-//! JSON manifest files that describe the files and directories to include.
-//!
-//! # Example
-//!
-//! ```rust,no_run
-//! use stone::fat::{FatImageOptions, FatType, create_fat_image};
-//! use std::path::PathBuf;
-//!
-//! fn main() -> Result<(), String> {
-//!     let options = FatImageOptions::new()
-//!         .with_manifest_path("files.json")
-//!         .with_base_path("./source")
-//!         .with_output_path("filesystem.img")
-//!         .with_size_mb(32)
-//!         .with_label("MYFS")
-//!         .with_fat_type(FatType::Fat32)
-//!         .with_verbose(true);
-//!
-//!     create_fat_image(&options)?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! # Manifest Format
-//!
-//! The JSON manifest should have the following structure:
-//!
-//! ```json
-//! {
-//!   "directories": ["boot", "config"],
-//!   "files": [
-//!     {
-//!       "filename": "kernel.bin",
-//!       "output": "boot/kernel.bin"
-//!     },
-//!     {
-//!       "filename": "config.txt"
-//!     }
-//!   ]
-//! }
-//! ```
-
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // Custom trait that combines Read, Write, and Seek
+#[allow(dead_code)]
 trait ReadWriteSeek: Read + Write + Seek {}
 impl<T: Read + Write + Seek> ReadWriteSeek for T {}
 
@@ -77,18 +33,19 @@ impl FromStr for FatType {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct FileEntry {
-    filename: Option<String>,
-    output: Option<String>,
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FileEntry {
+    pub filename: Option<String>,
+    pub output: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct Manifest {
-    files: Vec<FileEntry>,
-    directories: Option<Vec<String>>,
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Manifest {
+    pub files: Vec<FileEntry>,
+    pub directories: Option<Vec<String>>,
 }
 
+#[allow(dead_code)]
 pub struct FatImageOptions {
     pub manifest_path: PathBuf,
     pub base_path: PathBuf,
@@ -113,6 +70,7 @@ impl Default for FatImageOptions {
     }
 }
 
+#[allow(dead_code)]
 impl FatImageOptions {
     pub fn new() -> Self {
         Self::default()
@@ -133,7 +91,7 @@ impl FatImageOptions {
         self
     }
 
-    pub fn with_size_mb(mut self, size_mb: u64) -> Self {
+    pub fn with_size_mebibytes(mut self, size_mb: u64) -> Self {
         self.size_mb = size_mb;
         self
     }
@@ -216,6 +174,7 @@ pub fn list_directory_recursive(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn create_fat_image(options: &FatImageOptions) -> Result<(), String> {
     let mut base_path = options.base_path.clone();
     if base_path.is_relative() {
@@ -252,6 +211,7 @@ pub fn create_fat_image(options: &FatImageOptions) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn generate_fat_image(
     options: &FatImageOptions,
     manifest: &Manifest,
@@ -338,6 +298,7 @@ fn generate_fat_image(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_directory_path(
     root_dir: &fatfs::Dir<Box<dyn ReadWriteSeek>>,
     dir_path: &str,
@@ -359,6 +320,7 @@ fn create_directory_path(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn add_file_to_fat(
     root_dir: &fatfs::Dir<Box<dyn ReadWriteSeek>>,
     base: &Path,

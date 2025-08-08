@@ -1,14 +1,14 @@
 {
   "runtime": {
-    "platform": "avocado-target",
-    "architecture": "arm64"
+    "platform": "avocado-portable",
+    "architecture": "noarch"
   },
   "storage_devices": {
     "rootdisk": {
       "out": "rootdisk_1",
       "build_args": {
         "type": "fwup",
-        "template": "template_1"
+        "template": "rootdisk.conf"
       },
       "devpath": "/dev/mmcblk0",
       "block_size": 512,
@@ -23,7 +23,7 @@
             "files": [
               "file_1",
               {
-                "in": "file_2",
+                "in": "subdir/file_2",
                 "out": "foo/file_2"
               }
             ]

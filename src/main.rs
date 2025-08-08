@@ -28,6 +28,6 @@ fn run() -> Result<(), String> {
     match cli.command {
         Commands::Validate(args) => args.execute(),
         Commands::DescribeManifest(args) => args.execute(),
-        Commands::Build(args) => args.execute(),
+        Commands::Create(args) => args.execute(),
     }
 }

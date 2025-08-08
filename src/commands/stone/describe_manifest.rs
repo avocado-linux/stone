@@ -31,40 +31,47 @@ pub fn describe_manifest_command(manifest_path: &Path) -> Result<(), String> {
     }
 
     let manifest = Manifest::from_file(manifest_path)?;
-    describe_manifest(&manifest);
+    describe_manifest(&manifest)?;
     log_success("Described manifest.");
     Ok(())
 }
 
-// Helper function to convert size with units to a display string
-fn format_size_display(size: i64, size_unit: &str) -> String {
+// Helper function to format size when both value and unit are known
+fn format_size(size: i64, size_unit: &str) -> Result<String, String> {
     match size_unit {
-        "bytes" => format!("{size} bytes"),
-        "kibibytes" => format!("{size} KiB"),
-        "mebibytes" => format!("{size} MiB"),
-        "gibibytes" => format!("{size} GiB"),
-        "tebibytes" => format!("{size} TiB"),
-        "kilobytes" => format!("{size} KB"),
-        "megabytes" => format!("{size} MB"),
-        "gigabytes" => format!("{size} GB"),
-        "terabytes" => format!("{size} TB"),
-        "blocks" => format!("{size} blocks"),
-        _ => format!("{size} {size_unit}"),
+        "bytes" => Ok(format!("{size} bytes")),
+        "kibibytes" => Ok(format!("{size} KiB")),
+        "mebibytes" => Ok(format!("{size} MiB")),
+        "gibibytes" => Ok(format!("{size} GiB")),
+        "tebibytes" => Ok(format!("{size} TiB")),
+        "kilobytes" => Ok(format!("{size} KB")),
+        "megabytes" => Ok(format!("{size} MB")),
+        "gigabytes" => Ok(format!("{size} GB")),
+        "terabytes" => Ok(format!("{size} TB")),
+        "blocks" => Ok(format!("{size} blocks")),
+        _ => Err(format!(
+            "Unknown size unit '{size_unit}'. Supported units: bytes, kibibytes, mebibytes, gibibytes, tebibytes, kilobytes, megabytes, gigabytes, terabytes, blocks."
+        )),
     }
 }
 
-fn format_offset_display(offset: Option<i64>, offset_unit: Option<&String>) -> String {
+fn format_offset_display(
+    offset: Option<i64>,
+    offset_unit: Option<&String>,
+) -> Result<String, String> {
     match (offset, offset_unit) {
         (Some(offset_val), Some(unit)) => match unit.as_str() {
-            "bytes" => format!("{offset_val}"),
-            "blocks" => format!("{offset_val}*blocks"),
-            _ => format!("{offset_val} {unit}"),
+            "bytes" => Ok(format!("{offset_val} bytes")),
+            "blocks" => Ok(format!("{offset_val} blocks")),
+            _ => Err(format!(
+                "Unknown offset unit '{unit}'. Supported units: bytes, blocks."
+            )),
         },
-        (Some(offset_val), None) => format!("{offset_val}"),
-        _ => "-".to_string(),
+        (Some(offset_val), None) => Ok(format!("{offset_val}")),
+        _ => Ok("-".to_string()),
     }
 }
-fn describe_manifest(manifest: &Manifest) {
+fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
     let mut output = String::new();
 
     // Header
@@ -91,6 +98,16 @@ fn describe_manifest(manifest: &Manifest) {
             device_name, device.out, build_type
         ));
 
+        if let Some(build_args) = &device.build_args {
+            if let Some(variant) = build_args.fat_variant() {
+                output.push_str(&format!("Build Variant  : {variant:?}\n"));
+            }
+
+            if let Some(template) = build_args.fwup_template() {
+                output.push_str(&format!("Build Template : {template}\n"));
+            }
+        }
+
         output.push_str(&format!("Device Path    : {}\n", device.devpath));
 
         if let Some(block_size) = device.block_size {
@@ -107,17 +124,14 @@ fn describe_manifest(manifest: &Manifest) {
         for (image_name, image) in images {
             output.push_str(&format!("\n  • {} → {}\n", image_name, image.out()));
 
-            // Show size if this is an Object image
+            // Show size if present
             if let Some(size) = image.size() {
-                if let Some(size_unit) = image.size_unit() {
-                    let size_display = format_size_display(size, size_unit);
-                    output.push_str(&format!("    Size: {size_display}\n"));
-                }
+                let size_unit = image.size_unit().unwrap(); // Always present when size is present
+                let size_display = format_size(size, size_unit)?;
+                output.push_str(&format!("    Size: {size_display}\n"));
             }
 
-            if let Some(build) = image.build() {
-                output.push_str(&format!("    Build: {build}\n"));
-
+            if let Some(_build) = image.build() {
                 // Show build_args if present
                 if let Some(build_args) = image.build_args() {
                     output.push_str("    Build Args:\n");
@@ -173,8 +187,8 @@ fn describe_manifest(manifest: &Manifest) {
         output.push_str("  ─  ───────────  ───────────  ─────────────  ────────────\n");
 
         for (idx, partition) in device.partitions.iter().enumerate() {
-            let offset = format_offset_display(partition.offset, partition.offset_unit.as_ref());
-            let size = format_size_display(partition.size, &partition.size_unit);
+            let offset = format_offset_display(partition.offset, partition.offset_unit.as_ref())?;
+            let size = format_size(partition.size, &partition.size_unit)?;
             let special = if partition.expand == Some("true".to_string()) {
                 "expandable"
             } else {
@@ -215,4 +229,5 @@ fn describe_manifest(manifest: &Manifest) {
     );
 
     println!("{output}");
+    Ok(())
 }

@@ -1,16 +1,15 @@
 use assert_cmd::Command;
-use stone::fat::list_fat_files;
 use tempfile::TempDir;
 
 #[test]
-fn test_build() {
+fn test_create() {
     let temp_dir = TempDir::new().unwrap();
     let output_path = temp_dir.path();
 
     Command::cargo_bin("stone")
         .unwrap()
         .args([
-            "build",
+            "create",
             "--manifest-path",
             "tests/fixtures/coverage/stone.json",
             "--output-dir",
@@ -25,21 +24,21 @@ fn test_build() {
     assert!(output_path.join("image_1").exists());
     assert!(output_path.join("image_2").exists());
 
-    // Check that the FAT image contains the expected files
-    let fat_image_path = output_path.join("image_1");
-    let fat_files = list_fat_files(&fat_image_path).expect("Failed to list FAT files");
+    // Check that the fwup template file was copied
+    assert!(output_path.join("rootdisk.conf").exists());
 
-    // The manifest specifies these files should be in the FAT image:
-    // - "file_1" (direct mapping)
-    // - "file_2" -> "foo/file_2" (mapped to subdirectory)
-    assert!(
-        fat_files.contains(&"file_1".to_string()),
-        "FAT image should contain file_1, found files: {fat_files:?}"
-    );
-    assert!(
-        fat_files.contains(&"foo/file_2".to_string()),
-        "FAT image should contain foo/file_2, found files: {fat_files:?}"
-    );
+    // Check that the manifest file was copied
+    assert!(output_path.join("stone.json").exists());
+
+    // Check that files preserve their input directory structure
+    // The file specified as "subdir/file_2" should be copied to "subdir/file_2", not "foo/file_2"
+    assert!(output_path.join("subdir/file_2").exists());
+    assert!(!output_path.join("foo/file_2").exists());
+
+    // The image files should be copied as-is (not built into FAT)
+    // since create command only stages files
+    assert!(output_path.join("image_1").exists());
+    assert!(output_path.join("image_2").exists());
 }
 
 #[test]
@@ -50,7 +49,7 @@ fn test_build_partition_without_image() {
     Command::cargo_bin("stone")
         .unwrap()
         .args([
-            "build",
+            "create",
             "--manifest-path",
             "tests/fixtures/partition_without_image/stone.json",
             "--output-dir",
@@ -62,12 +61,17 @@ fn test_build_partition_without_image() {
         .success();
 
     // Should not create any image files since there are no images defined
+    // But the manifest file should be copied
     let output_dir_entries: Vec<_> = std::fs::read_dir(output_path)
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert!(
-        output_dir_entries.is_empty(),
-        "Output directory should be empty when no images are defined"
+    assert_eq!(
+        output_dir_entries.len(),
+        1,
+        "Output directory should contain only the manifest file when no images are defined"
     );
+
+    // Verify the manifest file was copied
+    assert!(output_path.join("stone.json").exists());
 }
