@@ -44,9 +44,20 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
 
     // Validate all files referenced in the manifest
     let mut missing_files = Vec::new();
+    let mut missing_device_files = Vec::new();
 
     // Process each storage device
     for (device_name, device) in &manifest.storage_devices {
+        // Check fwup template file if device has fwup build args
+        if let Some(build_args) = &device.build_args {
+            if let Some(template) = build_args.fwup_template() {
+                let template_path = input_dir.join(template);
+                if !template_path.exists() {
+                    missing_device_files.push((device_name.clone(), template.to_string()));
+                }
+            }
+        }
+
         // Process each image in the device
         for (image_name, image) in &device.images {
             // Check if this is a string-type image (direct file reference)
@@ -123,11 +134,15 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
     }
 
     // Report results
-    if !missing_files.is_empty() {
-        let mut error_msg = format!(
-            "Validation failed. {} file(s) not found:",
-            missing_files.len()
-        );
+    if !missing_files.is_empty() || !missing_device_files.is_empty() {
+        let total_missing = missing_files.len() + missing_device_files.len();
+        let mut error_msg = format!("Validation failed. {total_missing} file(s) not found:");
+
+        // Report missing device-level files
+        for (device, filename) in missing_device_files {
+            error_msg.push_str(&format!("\n  device: {device}"));
+            error_msg.push_str(&format!("\n    {filename}"));
+        }
 
         // Group missing files by device and image
         let mut grouped: HashMap<(String, String), Vec<String>> = HashMap::new();

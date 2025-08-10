@@ -1,0 +1,19 @@
+{
+  "runtime": {
+    "platform": "avocado-portable",
+    "architecture": "noarch"
+  },
+  "storage_devices": {
+    "rootdisk": {
+      "out": "rootdisk_1",
+      "build_args": {
+        "type": "fwup",
+        "template": "missing_template.conf"
+      },
+      "devpath": "/dev/mmcblk0",
+      "block_size": 512,
+      "images": {},
+      "partitions": []
+    }
+  }
+}

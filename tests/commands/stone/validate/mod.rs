@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::str::contains;
 
 #[test]
 fn test_validate() {
@@ -28,4 +29,20 @@ fn test_validate_partition_without_image_key() {
         ])
         .assert()
         .success();
+}
+
+#[test]
+fn test_validate_missing_device_fwup_template() {
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            "tests/fixtures/missing_device_fwup_template/stone.json",
+            "--input-dir",
+            "tests/fixtures/missing_device_fwup_template",
+        ])
+        .assert()
+        .failure()
+        .stdout(contains("missing_template.conf"));
 }
