@@ -528,3 +528,143 @@ VENDOR_NAME="Test Corporation""#;
         building_storage_pos.unwrap()
     );
 }
+
+#[test]
+fn test_provision_env_vars_use_full_paths() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create test files
+    fs::write(input_path.join("input_file.txt"), "Input content").unwrap();
+    fs::write(input_path.join("simple.img"), "Simple image content").unwrap();
+
+    // Create os-release file
+    let os_release_content = r#"NAME="Test Linux"
+VERSION="1.0.0"
+ID=testlinux
+VERSION_ID="1.0.0"
+VERSION_CODENAME=jammy
+PRETTY_NAME="Test Linux 1.0.0"
+VENDOR_NAME="Test Corporation""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // Create a manifest with mixed image types to test path resolution
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.fw",
+                "devpath": "/dev/test",
+                "build_args": {
+                    "type": "fwup",
+                    "template": "test_template.conf"
+                },
+                "images": {
+                    "string_image": "simple.img",
+                    "generated_image": {
+                        "out": "generated.img",
+                        "size": 16,
+                        "size_unit": "megabytes",
+                        "build_args": {
+                            "type": "fat",
+                            "variant": "FAT32",
+                            "files": [
+                                "input_file.txt"
+                            ]
+                        }
+                    },
+                    "object_no_build": {
+                        "out": "object_input.img",
+                        "size": 32,
+                        "size_unit": "megabytes"
+                    }
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+    fs::write(input_path.join("object_input.img"), "Object input content").unwrap();
+
+    // Create a minimal fwup template that will at least parse
+    let fwup_template = r#"
+# Minimal fwup template for testing
+meta-product = "Test Product"
+meta-description = "Test Description"
+meta-version = "1.0.0"
+
+# Define resources that reference the environment variables
+file-resource boot {
+    host-path = "${AVOCADO_IMAGE_GENERATED_IMAGE}"
+}
+
+file-resource simple {
+    host-path = "${AVOCADO_IMAGE_STRING_IMAGE}"
+}
+
+file-resource object {
+    host-path = "${AVOCADO_IMAGE_OBJECT_NO_BUILD}"
+}
+
+task complete {
+    # Empty task for testing
+}
+"#;
+    fs::write(input_path.join("test_template.conf"), fwup_template).unwrap();
+
+    let result = Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert();
+
+    let output = result.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check that the generated FAT image was created
+    assert!(
+        input_path.join("_build").join("generated.img").exists(),
+        "Generated FAT image should be created"
+    );
+
+    // Look for environment variables in the debug output
+    // The paths should be absolute, not relative filenames
+
+    // Check that AVOCADO_IMAGE_STRING_IMAGE points to input directory
+    let string_image_env = format!("AVOCADO_IMAGE_STRING_IMAGE={}", input_path.join("simple.img").display());
+    assert!(
+        stdout.contains(&string_image_env),
+        "String image should point to input directory. Expected '{}' in output",
+        string_image_env
+    );
+
+    // Check that AVOCADO_IMAGE_GENERATED_IMAGE points to build directory
+    let generated_image_env = format!("AVOCADO_IMAGE_GENERATED_IMAGE={}", input_path.join("_build").join("generated.img").display());
+    assert!(
+        stdout.contains(&generated_image_env),
+        "Generated image should point to build directory. Expected '{}' in output",
+        generated_image_env
+    );
+
+    // Check that AVOCADO_IMAGE_OBJECT_NO_BUILD points to input directory (no build_args)
+    let object_image_env = format!("AVOCADO_IMAGE_OBJECT_NO_BUILD={}", input_path.join("object_input.img").display());
+    assert!(
+        stdout.contains(&object_image_env),
+        "Object image without build_args should point to input directory. Expected '{}' in output",
+        object_image_env
+    );
+
+    // Verify that AVOCADO_SDK_RUNTIME_DIR is no longer set
+    assert!(
+        !stdout.contains("AVOCADO_SDK_RUNTIME_DIR="),
+        "AVOCADO_SDK_RUNTIME_DIR should no longer be set"
+    );
+}

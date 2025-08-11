@@ -425,15 +425,11 @@ fn calculate_avocado_env_vars(
     device: &crate::manifest::StorageDevice,
     manifest: &Manifest,
     input_dir: &Path,
-    _build_dir: &Path,
+    build_dir: &Path,
 ) -> Result<HashMap<String, String>, String> {
     let mut env_vars = HashMap::new();
 
-    // Always present core environment variables
-    env_vars.insert(
-        "AVOCADO_SDK_RUNTIME_DIR".to_string(),
-        input_dir.to_string_lossy().to_string(),
-    );
+    // No longer setting AVOCADO_SDK_RUNTIME_DIR - image paths are now absolute
 
     // Meta Data - read from os-release file and manifest
     let (os_version, os_codename, os_description, os_author) = read_os_release_info(input_dir)?;
@@ -455,14 +451,28 @@ fn calculate_avocado_env_vars(
     // Device Info
     let block_size = device.block_size.unwrap_or(512);
 
-    // Dynamically set image environment variables based on what's in the manifest
+    // Dynamically set image environment variables with full paths
     for (image_name, image) in &device.images {
-        let image_filename = image.out();
         let name_upper = image_name.to_uppercase();
-
-        // Create environment variable name based on image name
         let env_var_name = format!("AVOCADO_IMAGE_{name_upper}");
-        env_vars.insert(env_var_name, image_filename.to_string());
+
+        // Determine the full path based on image type
+        let image_path = match image {
+            Image::String(filename) => {
+                // Input files are in the input directory
+                input_dir.join(filename).to_string_lossy().to_string()
+            }
+            Image::Object { out, build_args: Some(_), .. } => {
+                // Generated files (with build_args) are in the build directory
+                build_dir.join(out).to_string_lossy().to_string()
+            }
+            Image::Object { out, build_args: None, .. } => {
+                // Object files without build_args are input files in the input directory
+                input_dir.join(out).to_string_lossy().to_string()
+            }
+        };
+
+        env_vars.insert(env_var_name, image_path);
     }
 
     // Calculate partition offsets and sizes from the partition table
