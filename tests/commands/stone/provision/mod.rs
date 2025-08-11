@@ -432,3 +432,99 @@ VENDOR_NAME="Test Corporation""#;
             "Provision script 'provision.sh' failed",
         ));
 }
+
+#[test]
+fn test_provision_builds_images_before_storage_device() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create test files
+    fs::write(input_path.join("boot_file.txt"), "Boot content").unwrap();
+    fs::write(input_path.join("fwup_template.conf"), "# Dummy fwup template").unwrap();
+
+    // Create os-release file
+    let os_release_content = r#"NAME="Test Linux"
+VERSION="1.0.0"
+ID=testlinux
+VERSION_ID="1.0.0"
+VERSION_CODENAME=jammy
+PRETTY_NAME="Test Linux 1.0.0"
+VENDOR_NAME="Test Corporation""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // Create a manifest that has both FAT images and fwup storage device
+    // The fwup template would reference the FAT image output file
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "rootdisk": {
+                "out": "rootdisk.fw",
+                "devpath": "/dev/test",
+                "build_args": {
+                    "type": "fwup",
+                    "template": "fwup_template.conf"
+                },
+                "images": {
+                    "boot": {
+                        "out": "boot.img",
+                        "size": 16,
+                        "size_unit": "megabytes",
+                        "build_args": {
+                            "type": "fat",
+                            "variant": "FAT32",
+                            "files": [
+                                "boot_file.txt"
+                            ]
+                        }
+                    },
+                    "simple_image": "simple.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+    fs::write(input_path.join("simple.img"), "Simple image content").unwrap();
+
+    let result = Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert();
+
+    // The provision should succeed - meaning FAT images were built first,
+    // then fwup was attempted (even if it fails due to missing fwup binary)
+    // We verify the build order by checking that:
+    // 1. FAT image was created in _build
+    // 2. The output shows images being built before storage device
+    let output = result.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check that boot.img (FAT image) was built
+    assert!(
+        input_path.join("_build").join("boot.img").exists(),
+        "FAT image should be built before fwup attempts to use it"
+    );
+
+    // Check build order in log output
+    let building_image_pos = stdout.find("Building image 'boot'");
+    let building_storage_pos = stdout.find("Building storage device 'rootdisk'");
+
+    // Both should be present, and image should come before storage device
+    assert!(building_image_pos.is_some(), "Should log building image");
+    assert!(building_storage_pos.is_some(), "Should log building storage device");
+    assert!(
+        building_image_pos.unwrap() < building_storage_pos.unwrap(),
+        "Images should be built before storage device. Image build at {}, Storage build at {}",
+        building_image_pos.unwrap(),
+        building_storage_pos.unwrap()
+    );
+}

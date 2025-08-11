@@ -64,25 +64,25 @@ pub fn provision_command(input_dir: &Path, verbose: bool) -> Result<(), String> 
     for (device_name, device) in &manifest.storage_devices {
         log_info(&format!("Provisioning storage device '{device_name}'."));
 
-        // Build storage device if it has fwup build args
-        if let Some(build_args) = &device.build_args {
-            build_storage_device(
+        // First, build all images in the device (inner dependencies)
+        for (image_name, image) in &device.images {
+            build_image(
                 device_name,
-                device,
-                build_args,
-                &manifest,
+                image_name,
+                image,
                 input_dir,
                 &build_dir,
                 verbose,
             )?;
         }
 
-        // Process each image in the device
-        for (image_name, image) in &device.images {
-            build_image(
+        // Then, build storage device if it has fwup build args (outer dependencies)
+        if let Some(build_args) = &device.build_args {
+            build_storage_device(
                 device_name,
-                image_name,
-                image,
+                device,
+                build_args,
+                &manifest,
                 input_dir,
                 &build_dir,
                 verbose,
