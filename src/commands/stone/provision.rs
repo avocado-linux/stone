@@ -468,7 +468,10 @@ fn calculate_avocado_env_vars(
 
     // Set disk-specific environment variables if present on storage device
     if let Some(device_block_size) = device.block_size {
-        env_vars.insert("AVOCADO_DISK_BLOCK_SIZE".to_string(), device_block_size.to_string());
+        env_vars.insert(
+            "AVOCADO_DISK_BLOCK_SIZE".to_string(),
+            device_block_size.to_string(),
+        );
     }
     if let Some(device_uuid) = &device.uuid {
         env_vars.insert("AVOCADO_DISK_UUID".to_string(), device_uuid.clone());
@@ -485,11 +488,19 @@ fn calculate_avocado_env_vars(
                 // Input files are in the input directory
                 input_dir.join(filename).to_string_lossy().to_string()
             }
-            Image::Object { out, build_args: Some(_), .. } => {
+            Image::Object {
+                out,
+                build_args: Some(_),
+                ..
+            } => {
                 // Generated files (with build_args) are in the build directory
                 build_dir.join(out).to_string_lossy().to_string()
             }
-            Image::Object { out, build_args: None, .. } => {
+            Image::Object {
+                out,
+                build_args: None,
+                ..
+            } => {
                 // Object files without build_args are input files in the input directory
                 input_dir.join(out).to_string_lossy().to_string()
             }

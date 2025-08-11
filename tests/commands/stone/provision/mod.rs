@@ -440,7 +440,11 @@ fn test_provision_builds_images_before_storage_device() {
 
     // Create test files
     fs::write(input_path.join("boot_file.txt"), "Boot content").unwrap();
-    fs::write(input_path.join("fwup_template.conf"), "# Dummy fwup template").unwrap();
+    fs::write(
+        input_path.join("fwup_template.conf"),
+        "# Dummy fwup template",
+    )
+    .unwrap();
 
     // Create os-release file
     let os_release_content = r#"NAME="Avocado Linux"
@@ -520,7 +524,10 @@ VENDOR_NAME="Avocado Linux""#;
 
     // Both should be present, and image should come before storage device
     assert!(building_image_pos.is_some(), "Should log building image");
-    assert!(building_storage_pos.is_some(), "Should log building storage device");
+    assert!(
+        building_storage_pos.is_some(),
+        "Should log building storage device"
+    );
     assert!(
         building_image_pos.unwrap() < building_storage_pos.unwrap(),
         "Images should be built before storage device. Image build at {}, Storage build at {}",
@@ -639,22 +646,31 @@ task complete {
     // The paths should be absolute, not relative filenames
 
     // Check that AVOCADO_IMAGE_STRING_IMAGE points to input directory
-    let string_image_env = format!("AVOCADO_IMAGE_STRING_IMAGE={}", input_path.join("simple.img").display());
-        assert!(
+    let string_image_env = format!(
+        "AVOCADO_IMAGE_STRING_IMAGE={}",
+        input_path.join("simple.img").display()
+    );
+    assert!(
         stdout.contains(&string_image_env),
         "String image should point to input directory. Expected '{string_image_env}' in output"
     );
 
     // Check that AVOCADO_IMAGE_GENERATED_IMAGE points to build directory
-    let generated_image_env = format!("AVOCADO_IMAGE_GENERATED_IMAGE={}", input_path.join("_build").join("generated.img").display());
-        assert!(
+    let generated_image_env = format!(
+        "AVOCADO_IMAGE_GENERATED_IMAGE={}",
+        input_path.join("_build").join("generated.img").display()
+    );
+    assert!(
         stdout.contains(&generated_image_env),
         "Generated image should point to build directory. Expected '{generated_image_env}' in output"
     );
 
     // Check that AVOCADO_IMAGE_OBJECT_NO_BUILD points to input directory (no build_args)
-    let object_image_env = format!("AVOCADO_IMAGE_OBJECT_NO_BUILD={}", input_path.join("object_input.img").display());
-        assert!(
+    let object_image_env = format!(
+        "AVOCADO_IMAGE_OBJECT_NO_BUILD={}",
+        input_path.join("object_input.img").display()
+    );
+    assert!(
         stdout.contains(&object_image_env),
         "Object image without build_args should point to input directory. Expected '{object_image_env}' in output"
     );
@@ -748,18 +764,21 @@ task complete {
     // Check that the disk-specific environment variables are logged
     // The verbose output should show these environment variables when building the fwup image
     assert!(
-        stdout.contains("AVOCADO_DISK_BLOCK_SIZE=4096") || stderr.contains("AVOCADO_DISK_BLOCK_SIZE=4096"),
+        stdout.contains("AVOCADO_DISK_BLOCK_SIZE=4096")
+            || stderr.contains("AVOCADO_DISK_BLOCK_SIZE=4096"),
         "Should log AVOCADO_DISK_BLOCK_SIZE environment variable. Stdout: {stdout}, Stderr: {stderr}"
     );
 
     assert!(
-        stdout.contains("AVOCADO_DISK_UUID=12345678-1234-1234-1234-123456789abc") || stderr.contains("AVOCADO_DISK_UUID=12345678-1234-1234-1234-123456789abc"),
+        stdout.contains("AVOCADO_DISK_UUID=12345678-1234-1234-1234-123456789abc")
+            || stderr.contains("AVOCADO_DISK_UUID=12345678-1234-1234-1234-123456789abc"),
         "Should log AVOCADO_DISK_UUID environment variable. Stdout: {stdout}, Stderr: {stderr}"
     );
 
     // Check that we're building the correct fwup image
     assert!(
-        stdout.contains("Building fwup image 'fwup_image'") || stderr.contains("Building fwup image 'fwup_image'"),
+        stdout.contains("Building fwup image 'fwup_image'")
+            || stderr.contains("Building fwup image 'fwup_image'"),
         "Should be building the fwup image"
     );
 }
@@ -837,7 +856,8 @@ task complete {
 
     // Check that the disk-specific environment variables are NOT logged when not present
     assert!(
-        !stdout.contains("AVOCADO_DISK_BLOCK_SIZE=") && !stderr.contains("AVOCADO_DISK_BLOCK_SIZE="),
+        !stdout.contains("AVOCADO_DISK_BLOCK_SIZE=")
+            && !stderr.contains("AVOCADO_DISK_BLOCK_SIZE="),
         "Should not log AVOCADO_DISK_BLOCK_SIZE when not present in manifest"
     );
 
@@ -848,7 +868,8 @@ task complete {
 
     // Check that we're still building the fwup image
     assert!(
-        stdout.contains("Building fwup image 'fwup_image'") || stderr.contains("Building fwup image 'fwup_image'"),
+        stdout.contains("Building fwup image 'fwup_image'")
+            || stderr.contains("Building fwup image 'fwup_image'"),
         "Should be building the fwup image"
     );
 }
@@ -943,18 +964,21 @@ task complete {
 
     // Check that the storage device disk-specific environment variables are logged
     assert!(
-        stdout.contains("AVOCADO_DISK_BLOCK_SIZE=512") || stderr.contains("AVOCADO_DISK_BLOCK_SIZE=512"),
+        stdout.contains("AVOCADO_DISK_BLOCK_SIZE=512")
+            || stderr.contains("AVOCADO_DISK_BLOCK_SIZE=512"),
         "Should log AVOCADO_DISK_BLOCK_SIZE from storage device. Stdout: {stdout}, Stderr: {stderr}"
     );
 
     assert!(
-        stdout.contains("AVOCADO_DISK_UUID=4bc367b3-5d70-4289-b24d-9b09cb79685c") || stderr.contains("AVOCADO_DISK_UUID=4bc367b3-5d70-4289-b24d-9b09cb79685c"),
+        stdout.contains("AVOCADO_DISK_UUID=4bc367b3-5d70-4289-b24d-9b09cb79685c")
+            || stderr.contains("AVOCADO_DISK_UUID=4bc367b3-5d70-4289-b24d-9b09cb79685c"),
         "Should log AVOCADO_DISK_UUID from storage device. Stdout: {stdout}, Stderr: {stderr}"
     );
 
     // Check that we're building the storage device
     assert!(
-        stdout.contains("Building storage device 'rootdisk'") || stderr.contains("Building storage device 'rootdisk'"),
+        stdout.contains("Building storage device 'rootdisk'")
+            || stderr.contains("Building storage device 'rootdisk'"),
         "Should be building the rootdisk storage device"
     );
 

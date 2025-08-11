@@ -303,7 +303,10 @@ mod tests {
         };
 
         assert_eq!(image_with_disk_info.block_size(), Some(4096));
-        assert_eq!(image_with_disk_info.uuid(), Some("12345678-1234-1234-1234-123456789abc"));
+        assert_eq!(
+            image_with_disk_info.uuid(),
+            Some("12345678-1234-1234-1234-123456789abc")
+        );
 
         // Test Image::Object without block_size and uuid
         let image_without_disk_info = Image::Object {

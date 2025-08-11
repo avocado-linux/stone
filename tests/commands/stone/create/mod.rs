@@ -24,7 +24,10 @@ fn test_create() {
 
     // Check that only string-type images were copied
     // image_1 is an Image::Object with "out" field, so it should NOT be copied during create
-    assert!(!output_path.join("image_1").exists(), "image_1 should not be copied as it's an Image::Object that will be generated");
+    assert!(
+        !output_path.join("image_1").exists(),
+        "image_1 should not be copied as it's an Image::Object that will be generated"
+    );
     // image_2 is an Image::String, so it should be copied
     assert!(output_path.join("image_2").exists());
 
@@ -45,8 +48,14 @@ fn test_create() {
     // The string image files should be copied as-is (not built into FAT)
     // since create command only stages files
     // But object images with "out" field should not be copied
-    assert!(!output_path.join("image_1").exists(), "image_1 should not be copied as it's an Image::Object");
-    assert!(output_path.join("image_2").exists(), "image_2 should be copied as it's an Image::String");
+    assert!(
+        !output_path.join("image_1").exists(),
+        "image_1 should not be copied as it's an Image::Object"
+    );
+    assert!(
+        output_path.join("image_2").exists(),
+        "image_2 should be copied as it's an Image::String"
+    );
 }
 
 #[test]
