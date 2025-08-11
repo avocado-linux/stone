@@ -45,13 +45,13 @@ fn test_provision_creates_build_dir() {
     fs::write(input_path.join("simple.img"), "test content").unwrap();
 
     // Create os-release file for AVOCADO_OS_VERSION
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     Command::cargo_bin("stone")
@@ -78,13 +78,13 @@ fn test_provision_fat_image_without_fwup() {
     fs::write(input_path.join("test_file.txt"), "Hello, FAT!").unwrap();
 
     // Create os-release file for AVOCADO_OS_VERSION
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     // Create a manifest with just a FAT image (no fwup required)
@@ -119,13 +119,13 @@ VENDOR_NAME="Test Corporation""#;
     fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
 
     // Create os-release file for AVOCADO_OS_VERSION
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     let result = Command::cargo_bin("stone")
@@ -188,13 +188,13 @@ fn test_provision_unsupported_size_unit() {
     fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
 
     // Create os-release file for AVOCADO_OS_VERSION
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     Command::cargo_bin("stone")
@@ -273,10 +273,10 @@ fn test_provision_invalid_os_release() {
     fs::write(input_path.join("test.conf"), "# Dummy fwup config").unwrap();
 
     // Create os-release file without VERSION_ID
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
-PRETTY_NAME="Test Linux 1.0.0""#;
+ID=avocado
+PRETTY_NAME="Avocado Linux 1.0.0""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     Command::cargo_bin("stone")
@@ -335,13 +335,13 @@ exit 0
     }
 
     // Create os-release file for AVOCADO_OS_VERSION
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     Command::cargo_bin("stone")
@@ -414,13 +414,13 @@ exit 1
     }
 
     // Create os-release file for AVOCADO_OS_VERSION
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     Command::cargo_bin("stone")
@@ -443,13 +443,13 @@ fn test_provision_builds_images_before_storage_device() {
     fs::write(input_path.join("fwup_template.conf"), "# Dummy fwup template").unwrap();
 
     // Create os-release file
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     // Create a manifest that has both FAT images and fwup storage device
@@ -539,13 +539,13 @@ fn test_provision_env_vars_use_full_paths() {
     fs::write(input_path.join("simple.img"), "Simple image content").unwrap();
 
     // Create os-release file
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     // Create a manifest with mixed image types to test path resolution
@@ -593,8 +593,8 @@ VENDOR_NAME="Test Corporation""#;
     // Create a minimal fwup template that will at least parse
     let fwup_template = r#"
 # Minimal fwup template for testing
-meta-product = "Test Product"
-meta-description = "Test Description"
+meta-product = "Avocado Test Image"
+meta-description = "Generic test image for Avocado"
 meta-version = "1.0.0"
 
 # Define resources that reference the environment variables
@@ -672,13 +672,13 @@ fn test_provision_fwup_image_with_disk_env_vars() {
     let input_path = temp_dir.path();
 
     // Create os-release file
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     // Create a manifest with a fwup image that has block_size and uuid
@@ -714,8 +714,8 @@ VENDOR_NAME="Test Corporation""#;
     // Create a minimal fwup template
     let fwup_template = r#"
 # Minimal fwup template for testing
-meta-product = "Test Product"
-meta-description = "Test Description"
+meta-product = "Avocado Test Image"
+meta-description = "Generic test image for Avocado"
 meta-version = "1.0.0"
 
 # Define a resource that would use the disk environment variables
@@ -770,13 +770,13 @@ fn test_provision_fwup_image_without_disk_env_vars() {
     let input_path = temp_dir.path();
 
     // Create os-release file
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     // Create a manifest with a fwup image that does NOT have block_size and uuid
@@ -810,8 +810,8 @@ VENDOR_NAME="Test Corporation""#;
     // Create a minimal fwup template
     let fwup_template = r#"
 # Minimal fwup template for testing
-meta-product = "Test Product"
-meta-description = "Test Description"
+meta-product = "Avocado Test Image"
+meta-description = "Generic test image for Avocado"
 meta-version = "1.0.0"
 
 task complete {
@@ -862,20 +862,20 @@ fn test_provision_storage_device_with_disk_env_vars() {
     fs::write(input_path.join("boot_file.txt"), "Boot content").unwrap();
 
     // Create os-release file
-    let os_release_content = r#"NAME="Test Linux"
+    let os_release_content = r#"NAME="Avocado Linux"
 VERSION="1.0.0"
-ID=testlinux
+ID=avocado
 VERSION_ID="1.0.0"
-VERSION_CODENAME=jammy
-PRETTY_NAME="Test Linux 1.0.0"
-VENDOR_NAME="Test Corporation""#;
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
     fs::write(input_path.join("os-release"), os_release_content).unwrap();
 
     // Create a manifest with storage device that has block_size and uuid (like your imx93 example)
     let manifest_content = r#"{
         "runtime": {
-            "platform": "test-platform",
-            "architecture": "arm64"
+            "platform": "generic-platform",
+            "architecture": "test-arch"
         },
         "storage_devices": {
             "rootdisk": {
@@ -884,7 +884,7 @@ VENDOR_NAME="Test Corporation""#;
                     "type": "fwup",
                     "template": "rootdisk.conf"
                 },
-                "devpath": "/dev/mmcblk1",
+                "devpath": "/dev/generic",
                 "block_size": 512,
                 "uuid": "4bc367b3-5d70-4289-b24d-9b09cb79685c",
                 "images": {
@@ -911,8 +911,8 @@ VENDOR_NAME="Test Corporation""#;
     // Create a minimal fwup template
     let fwup_template = r#"
 # Minimal fwup template for testing storage device
-meta-product = "Test Product"
-meta-description = "Test Description"
+meta-product = "Avocado Test Image"
+meta-description = "Generic test image for Avocado"
 meta-version = "1.0.0"
 
 # Example of how fwup template would use the disk environment variables
