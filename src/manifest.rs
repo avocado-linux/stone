@@ -78,6 +78,8 @@ pub struct StorageDevice {
     pub devpath: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
     pub images: std::collections::HashMap<String, Image>,
     pub partitions: Vec<Partition>,
 }
@@ -92,6 +94,10 @@ pub enum Image {
         build_args: Option<BuildArgs>,
         size: i64,
         size_unit: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        block_size: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        uuid: Option<String>,
     },
 }
 
@@ -140,6 +146,20 @@ impl Image {
         match self {
             Image::String(_) => None,
             Image::Object { size_unit, .. } => Some(size_unit),
+        }
+    }
+
+    pub fn block_size(&self) -> Option<u32> {
+        match self {
+            Image::String(_) => None,
+            Image::Object { block_size, .. } => *block_size,
+        }
+    }
+
+    pub fn uuid(&self) -> Option<&str> {
+        match self {
+            Image::String(_) => None,
+            Image::Object { uuid, .. } => uuid.as_deref(),
         }
     }
 }
@@ -258,12 +278,50 @@ mod tests {
             }),
             size: 100,
             size_unit: "megabytes".to_string(),
+            block_size: None,
+            uuid: None,
         };
 
         assert_eq!(image.build().unwrap(), "fat");
 
         let string_image = Image::String("simple.img".to_string());
         assert!(string_image.build().is_none());
+    }
+
+    #[test]
+    fn test_image_block_size_and_uuid() {
+        // Test Image::Object with block_size and uuid
+        let image_with_disk_info = Image::Object {
+            out: "disk.img".to_string(),
+            build_args: Some(BuildArgs::Fwup {
+                template: "disk.conf".to_string(),
+            }),
+            size: 512,
+            size_unit: "megabytes".to_string(),
+            block_size: Some(4096),
+            uuid: Some("12345678-1234-1234-1234-123456789abc".to_string()),
+        };
+
+        assert_eq!(image_with_disk_info.block_size(), Some(4096));
+        assert_eq!(image_with_disk_info.uuid(), Some("12345678-1234-1234-1234-123456789abc"));
+
+        // Test Image::Object without block_size and uuid
+        let image_without_disk_info = Image::Object {
+            out: "simple.img".to_string(),
+            build_args: None,
+            size: 256,
+            size_unit: "megabytes".to_string(),
+            block_size: None,
+            uuid: None,
+        };
+
+        assert_eq!(image_without_disk_info.block_size(), None);
+        assert_eq!(image_without_disk_info.uuid(), None);
+
+        // Test Image::String
+        let string_image = Image::String("file.img".to_string());
+        assert_eq!(string_image.block_size(), None);
+        assert_eq!(string_image.uuid(), None);
     }
 
     #[test]

@@ -640,31 +640,327 @@ task complete {
 
     // Check that AVOCADO_IMAGE_STRING_IMAGE points to input directory
     let string_image_env = format!("AVOCADO_IMAGE_STRING_IMAGE={}", input_path.join("simple.img").display());
-    assert!(
+        assert!(
         stdout.contains(&string_image_env),
-        "String image should point to input directory. Expected '{}' in output",
-        string_image_env
+        "String image should point to input directory. Expected '{string_image_env}' in output"
     );
 
     // Check that AVOCADO_IMAGE_GENERATED_IMAGE points to build directory
     let generated_image_env = format!("AVOCADO_IMAGE_GENERATED_IMAGE={}", input_path.join("_build").join("generated.img").display());
-    assert!(
+        assert!(
         stdout.contains(&generated_image_env),
-        "Generated image should point to build directory. Expected '{}' in output",
-        generated_image_env
+        "Generated image should point to build directory. Expected '{generated_image_env}' in output"
     );
 
     // Check that AVOCADO_IMAGE_OBJECT_NO_BUILD points to input directory (no build_args)
     let object_image_env = format!("AVOCADO_IMAGE_OBJECT_NO_BUILD={}", input_path.join("object_input.img").display());
-    assert!(
+        assert!(
         stdout.contains(&object_image_env),
-        "Object image without build_args should point to input directory. Expected '{}' in output",
-        object_image_env
+        "Object image without build_args should point to input directory. Expected '{object_image_env}' in output"
     );
 
     // Verify that AVOCADO_SDK_RUNTIME_DIR is no longer set
     assert!(
         !stdout.contains("AVOCADO_SDK_RUNTIME_DIR="),
         "AVOCADO_SDK_RUNTIME_DIR should no longer be set"
+    );
+}
+
+#[test]
+fn test_provision_fwup_image_with_disk_env_vars() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create os-release file
+    let os_release_content = r#"NAME="Test Linux"
+VERSION="1.0.0"
+ID=testlinux
+VERSION_ID="1.0.0"
+VERSION_CODENAME=jammy
+PRETTY_NAME="Test Linux 1.0.0"
+VENDOR_NAME="Test Corporation""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // Create a manifest with a fwup image that has block_size and uuid
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.fw",
+                "devpath": "/dev/test",
+                "images": {
+                    "fwup_image": {
+                        "out": "custom.fw",
+                        "size": 128,
+                        "size_unit": "megabytes",
+                        "block_size": 4096,
+                        "uuid": "12345678-1234-1234-1234-123456789abc",
+                        "build_args": {
+                            "type": "fwup",
+                            "template": "fwup_template.conf"
+                        }
+                    }
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+
+    // Create a minimal fwup template
+    let fwup_template = r#"
+# Minimal fwup template for testing
+meta-product = "Test Product"
+meta-description = "Test Description"
+meta-version = "1.0.0"
+
+# Define a resource that would use the disk environment variables
+file-resource disk-image {
+    # In real usage, this might reference the UUID or block size
+    host-path = "/dev/null"
+}
+
+task complete {
+    # Empty task for testing
+}
+"#;
+    fs::write(input_path.join("fwup_template.conf"), fwup_template).unwrap();
+
+    // Run provision command - it will fail due to missing fwup but we can check the log output
+    let result = Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert();
+
+    let output = result.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Check that the disk-specific environment variables are logged
+    // The verbose output should show these environment variables when building the fwup image
+    assert!(
+        stdout.contains("AVOCADO_DISK_BLOCK_SIZE=4096") || stderr.contains("AVOCADO_DISK_BLOCK_SIZE=4096"),
+        "Should log AVOCADO_DISK_BLOCK_SIZE environment variable. Stdout: {stdout}, Stderr: {stderr}"
+    );
+
+    assert!(
+        stdout.contains("AVOCADO_DISK_UUID=12345678-1234-1234-1234-123456789abc") || stderr.contains("AVOCADO_DISK_UUID=12345678-1234-1234-1234-123456789abc"),
+        "Should log AVOCADO_DISK_UUID environment variable. Stdout: {stdout}, Stderr: {stderr}"
+    );
+
+    // Check that we're building the correct fwup image
+    assert!(
+        stdout.contains("Building fwup image 'fwup_image'") || stderr.contains("Building fwup image 'fwup_image'"),
+        "Should be building the fwup image"
+    );
+}
+
+#[test]
+fn test_provision_fwup_image_without_disk_env_vars() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create os-release file
+    let os_release_content = r#"NAME="Test Linux"
+VERSION="1.0.0"
+ID=testlinux
+VERSION_ID="1.0.0"
+VERSION_CODENAME=jammy
+PRETTY_NAME="Test Linux 1.0.0"
+VENDOR_NAME="Test Corporation""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // Create a manifest with a fwup image that does NOT have block_size and uuid
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.fw",
+                "devpath": "/dev/test",
+                "images": {
+                    "fwup_image": {
+                        "out": "custom.fw",
+                        "size": 128,
+                        "size_unit": "megabytes",
+                        "build_args": {
+                            "type": "fwup",
+                            "template": "fwup_template.conf"
+                        }
+                    }
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+
+    // Create a minimal fwup template
+    let fwup_template = r#"
+# Minimal fwup template for testing
+meta-product = "Test Product"
+meta-description = "Test Description"
+meta-version = "1.0.0"
+
+task complete {
+    # Empty task for testing
+}
+"#;
+    fs::write(input_path.join("fwup_template.conf"), fwup_template).unwrap();
+
+    // Run provision command
+    let result = Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert();
+
+    let output = result.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Check that the disk-specific environment variables are NOT logged when not present
+    assert!(
+        !stdout.contains("AVOCADO_DISK_BLOCK_SIZE=") && !stderr.contains("AVOCADO_DISK_BLOCK_SIZE="),
+        "Should not log AVOCADO_DISK_BLOCK_SIZE when not present in manifest"
+    );
+
+    assert!(
+        !stdout.contains("AVOCADO_DISK_UUID=") && !stderr.contains("AVOCADO_DISK_UUID="),
+        "Should not log AVOCADO_DISK_UUID when not present in manifest"
+    );
+
+    // Check that we're still building the fwup image
+    assert!(
+        stdout.contains("Building fwup image 'fwup_image'") || stderr.contains("Building fwup image 'fwup_image'"),
+        "Should be building the fwup image"
+    );
+}
+
+#[test]
+fn test_provision_storage_device_with_disk_env_vars() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create test files
+    fs::write(input_path.join("boot_file.txt"), "Boot content").unwrap();
+
+    // Create os-release file
+    let os_release_content = r#"NAME="Test Linux"
+VERSION="1.0.0"
+ID=testlinux
+VERSION_ID="1.0.0"
+VERSION_CODENAME=jammy
+PRETTY_NAME="Test Linux 1.0.0"
+VENDOR_NAME="Test Corporation""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // Create a manifest with storage device that has block_size and uuid (like your imx93 example)
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "arm64"
+        },
+        "storage_devices": {
+            "rootdisk": {
+                "out": "test-rootdisk.zip",
+                "build_args": {
+                    "type": "fwup",
+                    "template": "rootdisk.conf"
+                },
+                "devpath": "/dev/mmcblk1",
+                "block_size": 512,
+                "uuid": "4bc367b3-5d70-4289-b24d-9b09cb79685c",
+                "images": {
+                    "boot": {
+                        "out": "boot.img",
+                        "size": 128,
+                        "size_unit": "mebibytes",
+                        "build_args": {
+                            "type": "fat",
+                            "variant": "FAT32",
+                            "files": [
+                                "boot_file.txt"
+                            ]
+                        }
+                    }
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+
+    // Create a minimal fwup template
+    let fwup_template = r#"
+# Minimal fwup template for testing storage device
+meta-product = "Test Product"
+meta-description = "Test Description"
+meta-version = "1.0.0"
+
+# Example of how fwup template would use the disk environment variables
+%if defined(AVOCADO_DISK_UUID)
+    meta-uuid = "${AVOCADO_DISK_UUID}"
+%endif
+
+task complete {
+    # Empty task for testing
+}
+"#;
+    fs::write(input_path.join("rootdisk.conf"), fwup_template).unwrap();
+
+    // Run provision command
+    let result = Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert();
+
+    let output = result.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Check that the storage device disk-specific environment variables are logged
+    assert!(
+        stdout.contains("AVOCADO_DISK_BLOCK_SIZE=512") || stderr.contains("AVOCADO_DISK_BLOCK_SIZE=512"),
+        "Should log AVOCADO_DISK_BLOCK_SIZE from storage device. Stdout: {stdout}, Stderr: {stderr}"
+    );
+
+    assert!(
+        stdout.contains("AVOCADO_DISK_UUID=4bc367b3-5d70-4289-b24d-9b09cb79685c") || stderr.contains("AVOCADO_DISK_UUID=4bc367b3-5d70-4289-b24d-9b09cb79685c"),
+        "Should log AVOCADO_DISK_UUID from storage device. Stdout: {stdout}, Stderr: {stderr}"
+    );
+
+    // Check that we're building the storage device
+    assert!(
+        stdout.contains("Building storage device 'rootdisk'") || stderr.contains("Building storage device 'rootdisk'"),
+        "Should be building the rootdisk storage device"
+    );
+
+    // Check that the boot.img FAT image was built first
+    assert!(
+        input_path.join("_build").join("boot.img").exists(),
+        "FAT image should be built before storage device"
     );
 }

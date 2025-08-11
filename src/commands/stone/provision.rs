@@ -173,7 +173,7 @@ fn build_image(
                 verbose,
             }),
             BuildArgs::Fwup { template } => {
-                build_fwup_image(image_name, out, template, input_dir, build_dir, verbose)
+                build_fwup_image(image_name, image, template, input_dir, build_dir, verbose)
             }
         },
         Image::Object {
@@ -255,12 +255,13 @@ fn build_fat_image(params: FatImageParams) -> Result<(), String> {
 
 fn build_fwup_image(
     image_name: &str,
-    out: &str,
+    image: &Image,
     template: &str,
     input_dir: &Path,
     build_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
+    let out = image.out();
     log_info(&format!(
         "Building fwup image '{image_name}' -> '{out}' using template '{template}'."
     ));
@@ -268,8 +269,6 @@ fn build_fwup_image(
     let template_path = input_dir.join(template);
     let output_path = build_dir.join(out);
 
-    // For image-level fwup builds, we don't have full storage device context
-    // This is a simplified version - you may need to adjust based on your use case
     let mut cmd = Command::new("fwup");
     cmd.arg("-c")
         .arg("-f")
@@ -278,6 +277,14 @@ fn build_fwup_image(
         .arg(&output_path)
         .current_dir(build_dir);
 
+    // Set disk-specific environment variables if present
+    if let Some(block_size) = image.block_size() {
+        cmd.env("AVOCADO_DISK_BLOCK_SIZE", block_size.to_string());
+    }
+    if let Some(uuid) = image.uuid() {
+        cmd.env("AVOCADO_DISK_UUID", uuid);
+    }
+
     if verbose {
         log_debug(&format!(
             "Executing fwup in '{}': fwup -c -f {} -o {}",
@@ -285,6 +292,14 @@ fn build_fwup_image(
             template_path.display(),
             output_path.display()
         ));
+
+        // Log disk-specific environment variables
+        if let Some(block_size) = image.block_size() {
+            log_debug(&format!("  AVOCADO_DISK_BLOCK_SIZE={block_size}"));
+        }
+        if let Some(uuid) = image.uuid() {
+            log_debug(&format!("  AVOCADO_DISK_UUID={uuid}"));
+        }
     }
 
     let status = cmd.status().map_err(|e| {
@@ -450,6 +465,14 @@ fn calculate_avocado_env_vars(
 
     // Device Info
     let block_size = device.block_size.unwrap_or(512);
+
+    // Set disk-specific environment variables if present on storage device
+    if let Some(device_block_size) = device.block_size {
+        env_vars.insert("AVOCADO_DISK_BLOCK_SIZE".to_string(), device_block_size.to_string());
+    }
+    if let Some(device_uuid) = &device.uuid {
+        env_vars.insert("AVOCADO_DISK_UUID".to_string(), device_uuid.clone());
+    }
 
     // Dynamically set image environment variables with full paths
     for (image_name, image) in &device.images {
