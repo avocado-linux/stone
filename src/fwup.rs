@@ -4,6 +4,7 @@ use std::process::Command;
 
 /// Options for creating a firmware update package with fwup
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FwupOptions {
     /// Path to the fwup configuration file
     pub config_file: PathBuf,
@@ -17,6 +18,7 @@ pub struct FwupOptions {
 
 impl FwupOptions {
     /// Create new FwupOptions with required parameters
+    #[allow(dead_code)]
     pub fn new<P1, P2>(config_file: P1, output_file: P2) -> Self
     where
         P1: Into<PathBuf>,
@@ -31,18 +33,21 @@ impl FwupOptions {
     }
 
     /// Set the working directory for the fwup command
+    #[allow(dead_code)]
     pub fn with_working_dir<P: Into<PathBuf>>(mut self, dir: P) -> Self {
         self.working_dir = Some(dir.into());
         self
     }
 
     /// Enable verbose output
+    #[allow(dead_code)]
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
 }
 
+#[allow(dead_code)]
 pub fn create_firmware_package(options: &FwupOptions) -> Result<(), String> {
     // Validate inputs
     if !options.config_file.exists() {
@@ -123,6 +128,7 @@ pub fn create_firmware_package(options: &FwupOptions) -> Result<(), String> {
     }
 }
 
+#[allow(dead_code)]
 pub fn create_firmware_package_simple<P1, P2>(
     config_file: P1,
     output_file: P2,
@@ -135,6 +141,7 @@ where
     create_firmware_package(&options)
 }
 
+#[allow(dead_code)]
 pub fn create_firmware_package_in_dir<P1, P2, P3>(
     config_file: P1,
     output_file: P2,

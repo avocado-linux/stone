@@ -161,9 +161,17 @@ fn build_image(
             size_unit,
             ..
         } => match build_args {
-            BuildArgs::Fat { variant, files } => build_fat_image(
-                image_name, out, variant, files, size, size_unit, input_dir, build_dir, verbose,
-            ),
+            BuildArgs::Fat { variant, files } => build_fat_image(FatImageParams {
+                image_name,
+                out,
+                variant,
+                files,
+                size,
+                size_unit,
+                input_dir,
+                build_dir,
+                verbose,
+            }),
             BuildArgs::Fwup { template } => {
                 build_fwup_image(image_name, out, template, input_dir, build_dir, verbose)
             }
@@ -182,32 +190,39 @@ fn build_image(
     }
 }
 
-fn build_fat_image(
-    image_name: &str,
-    out: &str,
-    variant: &FatVariant,
-    files: &[FileEntry],
-    size: &i64,
-    size_unit: &str,
-    input_dir: &Path,
-    build_dir: &Path,
+struct FatImageParams<'a> {
+    image_name: &'a str,
+    out: &'a str,
+    variant: &'a FatVariant,
+    files: &'a [FileEntry],
+    size: &'a i64,
+    size_unit: &'a str,
+    input_dir: &'a Path,
+    build_dir: &'a Path,
     verbose: bool,
-) -> Result<(), String> {
-    log_info(&format!("Building FAT image '{image_name}' -> '{out}'."));
+}
+
+fn build_fat_image(params: FatImageParams) -> Result<(), String> {
+    log_info(&format!(
+        "Building FAT image '{}' -> '{}'.",
+        params.image_name, params.out
+    ));
 
     // Convert size to MB
-    let size_mb = convert_size_to_mb(*size, size_unit)?;
+    let size_mb = convert_size_to_mb(*params.size, params.size_unit)?;
 
     // Convert FatVariant to fat::FatType
-    let fat_type = match variant {
+    let fat_type = match params.variant {
         FatVariant::Fat12 => fat::FatType::Fat12,
         FatVariant::Fat16 => fat::FatType::Fat16,
         FatVariant::Fat32 => fat::FatType::Fat32,
     };
 
     // Create a temporary manifest for the FAT builder
-    let fat_manifest = create_fat_manifest(files)?;
-    let temp_manifest_path = build_dir.join(format!("temp_manifest_{image_name}.json"));
+    let fat_manifest = create_fat_manifest(params.files)?;
+    let temp_manifest_path = params
+        .build_dir
+        .join(format!("temp_manifest_{}.json", params.image_name));
 
     // Write temporary manifest
     let manifest_json = serde_json::to_string_pretty(&fat_manifest)
@@ -215,16 +230,16 @@ fn build_fat_image(
     fs::write(&temp_manifest_path, manifest_json)
         .map_err(|e| format!("Failed to write temporary manifest: {e}"))?;
 
-    let output_path = build_dir.join(out);
+    let output_path = params.build_dir.join(params.out);
 
     // Create FAT image options
     let options = fat::FatImageOptions::new()
         .with_manifest_path(&temp_manifest_path)
-        .with_base_path(input_dir)
+        .with_base_path(params.input_dir)
         .with_output_path(&output_path)
         .with_size_mebibytes(size_mb)
         .with_fat_type(fat_type)
-        .with_verbose(verbose);
+        .with_verbose(params.verbose);
 
     // Build the FAT image
     let result = fat::create_fat_image(&options);
@@ -234,7 +249,7 @@ fn build_fat_image(
 
     result?;
 
-    log_success(&format!("Built FAT image '{out}'."));
+    log_success(&format!("Built FAT image '{}'.", params.out));
     Ok(())
 }
 
@@ -370,7 +385,7 @@ fn build_fwup_with_env_vars(
         ));
         log_debug("Environment variables:");
         for (key, value) in &env_vars {
-            log_debug(&format!("  {}={}", key, value));
+            log_debug(&format!("  {key}={value}"));
         }
     }
 
@@ -387,7 +402,7 @@ fn build_fwup_with_env_vars(
         if !verbose {
             log_debug("Environment variables used:");
             for (key, value) in &env_vars {
-                log_debug(&format!("  {}={}", key, value));
+                log_debug(&format!("  {key}={value}"));
             }
         }
         return Err(format!(
@@ -446,7 +461,7 @@ fn calculate_avocado_env_vars(
         let name_upper = image_name.to_uppercase();
 
         // Create environment variable name based on image name
-        let env_var_name = format!("AVOCADO_IMAGE_{}", name_upper);
+        let env_var_name = format!("AVOCADO_IMAGE_{name_upper}");
         env_vars.insert(env_var_name, image_filename.to_string());
     }
 
@@ -457,7 +472,7 @@ fn calculate_avocado_env_vars(
         let partition_offset = if let Some(offset) = partition.offset {
             convert_to_blocks(
                 offset,
-                &partition.offset_unit.as_deref().unwrap_or("blocks"),
+                partition.offset_unit.as_deref().unwrap_or("blocks"),
                 block_size,
             )?
         } else {
@@ -468,20 +483,17 @@ fn calculate_avocado_env_vars(
 
         // Set partition variables based on the partition name
         if let Some(partition_name) = &partition.name {
-            let name_upper = partition_name
-                .to_uppercase()
-                .replace('-', "_")
-                .replace(' ', "_");
+            let name_upper = partition_name.to_uppercase().replace(['-', ' '], "_");
 
             // Set offset for this partition
             env_vars.insert(
-                format!("AVOCADO_PARTITION_{}_OFFSET", name_upper),
+                format!("AVOCADO_PARTITION_{name_upper}_OFFSET"),
                 partition_offset.to_string(),
             );
 
             // Set size in blocks for this partition
             env_vars.insert(
-                format!("AVOCADO_PARTITION_{}_BLOCKS", name_upper),
+                format!("AVOCADO_PARTITION_{name_upper}_BLOCKS"),
                 partition_size.to_string(),
             );
 
@@ -489,14 +501,14 @@ fn calculate_avocado_env_vars(
             if let Some(offset_redundant) = partition.offset_redundant {
                 let redundant_offset = convert_to_blocks(
                     offset_redundant,
-                    &partition
+                    partition
                         .offset_redundant_unit
                         .as_deref()
                         .unwrap_or("blocks"),
                     block_size,
                 )?;
                 env_vars.insert(
-                    format!("AVOCADO_PARTITION_{}_OFFSET_REDUND", name_upper),
+                    format!("AVOCADO_PARTITION_{name_upper}_OFFSET_REDUND"),
                     redundant_offset.to_string(),
                 );
             }
@@ -504,7 +516,7 @@ fn calculate_avocado_env_vars(
             // Set expand property if present
             if let Some(expand) = &partition.expand {
                 env_vars.insert(
-                    format!("AVOCADO_PARTITION_{}_EXPAND", name_upper),
+                    format!("AVOCADO_PARTITION_{name_upper}_EXPAND"),
                     expand.to_string(),
                 );
             }
@@ -588,9 +600,9 @@ fn read_os_release_info(input_dir: &Path) -> Result<(String, String, String, Str
         )
     })?;
 
-    let codename = version_codename.unwrap_or_else(|| String::new());
-    let description = pretty_name.unwrap_or_else(|| String::new());
-    let author = vendor_name.unwrap_or_else(|| String::new());
+    let codename = version_codename.unwrap_or_else(String::new);
+    let description = pretty_name.unwrap_or_else(String::new);
+    let author = vendor_name.unwrap_or_else(String::new);
 
     Ok((version, codename, description, author))
 }
@@ -605,8 +617,7 @@ fn execute_provision_script(
 
     if !provision_path.exists() {
         return Err(format!(
-            "Provision file '{}' not found in input directory.",
-            provision_file
+            "Provision file '{provision_file}' not found in input directory."
         ));
     }
 
@@ -634,12 +645,9 @@ fn execute_provision_script(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    let mut child = command.spawn().map_err(|e| {
-        format!(
-            "Failed to execute provision script '{}': {}",
-            provision_file, e
-        )
-    })?;
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Failed to execute provision script '{provision_file}': {e}"))?;
 
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -649,29 +657,22 @@ fn execute_provision_script(
 
     // Stream stdout in real-time
     let stdout_handle = std::thread::spawn(move || {
-        for line in stdout_reader.lines() {
-            if let Ok(line) = line {
-                println!("{}", line);
-            }
+        for line in stdout_reader.lines().map_while(Result::ok) {
+            println!("{line}");
         }
     });
 
     // Stream stderr in real-time
     let stderr_handle = std::thread::spawn(move || {
-        for line in stderr_reader.lines() {
-            if let Ok(line) = line {
-                eprintln!("{}", line);
-            }
+        for line in stderr_reader.lines().map_while(Result::ok) {
+            eprintln!("{line}");
         }
     });
 
     // Wait for the process to complete
-    let status = child.wait().map_err(|e| {
-        format!(
-            "Failed to wait for provision script '{}': {}",
-            provision_file, e
-        )
-    })?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for provision script '{provision_file}': {e}"))?;
 
     // Wait for the output threads to complete
     let _ = stdout_handle.join();
@@ -686,8 +687,7 @@ fn execute_provision_script(
     }
 
     log_success(&format!(
-        "Provision script '{}' completed successfully.",
-        provision_file
+        "Provision script '{provision_file}' completed successfully."
     ));
     Ok(())
 }

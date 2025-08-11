@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates;
 use std::fs;
 use tempfile::TempDir;
 
@@ -431,5 +432,3 @@ VENDOR_NAME="Test Corporation""#;
             "Provision script 'provision.sh' failed",
         ));
 }
-
-use predicates;
