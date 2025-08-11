@@ -202,16 +202,26 @@ fn process_image(
         }
     }
 
-    // Always copy the image file itself (regardless of whether it has individual files)
-    let (input_filename, output_filename) = match image {
-        crate::manifest::Image::String(filename) => (filename.as_str(), filename.as_str()),
-        crate::manifest::Image::Object { out, .. } => (out.as_str(), out.as_str()),
-    };
-
-    let input_path = input_dir.join(input_filename);
-    let output_path = output_dir.join(output_filename);
-
-    copy_file(&input_path, &output_path, verbose)
+    // Only copy the image file if it's a String type (input file)
+    // Object types represent generated output files that don't exist yet
+    match image {
+        crate::manifest::Image::String(filename) => {
+            // This is an input file that should be copied
+            let input_path = input_dir.join(filename);
+            let output_path = output_dir.join(filename);
+            copy_file(&input_path, &output_path, verbose)
+        }
+        crate::manifest::Image::Object { out, .. } => {
+            // This is an output file that will be generated during provision
+            // Don't try to copy it during create
+            if verbose {
+                log_debug(&format!(
+                    "Skipping copy of output file '{out}' for image '{image_name}' - will be generated during provision"
+                ));
+            }
+            Ok(())
+        }
+    }
 }
 
 fn process_file_entry(
