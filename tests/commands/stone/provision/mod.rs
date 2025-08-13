@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 
 #[test]
@@ -987,4 +988,142 @@ task complete {
         input_path.join("_build").join("boot.img").exists(),
         "FAT image should be built before storage device"
     );
+}
+
+#[test]
+fn test_provision_with_profile_system() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create a manifest with provision profiles
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "avocado-raspberrypi4",
+            "architecture": "arm64",
+            "provision_default": "img"
+        },
+        "provision": {
+            "envs": {
+                "device_info": {
+                    "AVOCADO_DEVICE_CERT": "device-cert-value",
+                    "AVOCADO_DEVICE_KEY": "device-key-value",
+                    "AVOCADO_DEVICE_ID": "device-123"
+                }
+            },
+            "profiles": {
+                "img": {
+                    "script": "stone-provision-img.sh",
+                    "envs": ["device_info"]
+                },
+                "sd": {
+                    "script": "stone-provision-sd.sh",
+                    "envs": [
+                        "device_info",
+                        {"SD_SPECIFIC": "sd-value"}
+                    ]
+                }
+            }
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {},
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+
+    // Create os-release file
+    let os_release_content = r#"NAME="Avocado Linux"
+VERSION="1.0.0"
+ID=avocado
+VERSION_ID="1.0.0"
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // Create provision scripts that output environment variables
+    let img_script_content = r#"#!/bin/bash
+echo "IMG Script executed" > provision_img_output.txt
+echo "AVOCADO_DEVICE_CERT=$AVOCADO_DEVICE_CERT" >> provision_img_output.txt
+echo "AVOCADO_DEVICE_KEY=$AVOCADO_DEVICE_KEY" >> provision_img_output.txt
+echo "AVOCADO_DEVICE_ID=$AVOCADO_DEVICE_ID" >> provision_img_output.txt
+"#;
+    fs::write(
+        input_path.join("stone-provision-img.sh"),
+        img_script_content,
+    )
+    .unwrap();
+    fs::set_permissions(
+        input_path.join("stone-provision-img.sh"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+
+    let sd_script_content = r#"#!/bin/bash
+echo "SD Script executed" > provision_sd_output.txt
+echo "AVOCADO_DEVICE_CERT=$AVOCADO_DEVICE_CERT" >> provision_sd_output.txt
+echo "SD_SPECIFIC=$SD_SPECIFIC" >> provision_sd_output.txt
+"#;
+    fs::write(input_path.join("stone-provision-sd.sh"), sd_script_content).unwrap();
+    fs::set_permissions(
+        input_path.join("stone-provision-sd.sh"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+
+    // Test with default profile (img)
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Using provision profile 'img'"))
+        .stdout(predicates::str::contains(
+            "Resolved 3 environment variables",
+        ));
+
+    // Check that the img script was executed
+    assert!(input_path.join("provision_img_output.txt").exists());
+    let img_output = fs::read_to_string(input_path.join("provision_img_output.txt")).unwrap();
+    assert!(img_output.contains("IMG Script executed"));
+    assert!(img_output.contains("AVOCADO_DEVICE_CERT=device-cert-value"));
+    assert!(img_output.contains("AVOCADO_DEVICE_KEY=device-key-value"));
+    assert!(img_output.contains("AVOCADO_DEVICE_ID=device-123"));
+
+    // Clean up for next test
+    fs::remove_file(input_path.join("provision_img_output.txt")).unwrap();
+
+    // Test with explicit profile (sd)
+    Command::cargo_bin("stone")
+        .unwrap()
+        .env("AVOCADO_PROVISION_PROFILE", "sd")
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Using provision profile 'sd'"))
+        .stdout(predicates::str::contains(
+            "Resolved 4 environment variables",
+        ));
+
+    // Check that the sd script was executed
+    assert!(input_path.join("provision_sd_output.txt").exists());
+    let sd_output = fs::read_to_string(input_path.join("provision_sd_output.txt")).unwrap();
+    assert!(sd_output.contains("SD Script executed"));
+    assert!(sd_output.contains("AVOCADO_DEVICE_CERT=device-cert-value"));
+    assert!(sd_output.contains("SD_SPECIFIC=sd-value"));
 }

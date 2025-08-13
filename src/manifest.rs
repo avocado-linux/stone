@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum FatVariant {
@@ -60,6 +61,8 @@ impl BuildArgs {
 pub struct Manifest {
     pub runtime: Runtime,
     pub storage_devices: std::collections::HashMap<String, StorageDevice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provision: Option<Provision>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -68,6 +71,29 @@ pub struct Runtime {
     pub architecture: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provision_default: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Provision {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envs: Option<HashMap<String, HashMap<String, String>>>,
+    pub profiles: HashMap<String, ProvisionProfile>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProvisionProfile {
+    pub script: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envs: Option<Vec<ProvisionEnv>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ProvisionEnv {
+    Named(String),
+    Inline(HashMap<String, String>),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -223,6 +249,83 @@ impl Manifest {
             )
         })
     }
+
+    pub fn get_provision_profile(&self, profile_name: &str) -> Option<&ProvisionProfile> {
+        self.provision.as_ref()?.profiles.get(profile_name)
+    }
+
+    pub fn get_provision_default(&self) -> Option<&str> {
+        self.runtime.provision_default.as_deref()
+    }
+}
+
+impl Provision {
+    pub fn resolve_envs(
+        &self,
+        profile: &ProvisionProfile,
+    ) -> Result<HashMap<String, String>, String> {
+        let mut resolved_envs = HashMap::new();
+
+        if let Some(envs) = &profile.envs {
+            for env in envs {
+                match env {
+                    ProvisionEnv::Named(env_name) => {
+                        if let Some(named_envs) = &self.envs {
+                            if let Some(env_block) = named_envs.get(env_name) {
+                                for (key, value) in env_block {
+                                    resolved_envs.insert(key.clone(), value.clone());
+                                }
+                            } else {
+                                return Err(format!(
+                                    "[ERROR] Named environment block '{env_name}' not found in provision.envs."
+                                ));
+                            }
+                        } else {
+                            return Err(format!(
+                                "[ERROR] Named environment block '{env_name}' referenced but no provision.envs defined."
+                            ));
+                        }
+                    }
+                    ProvisionEnv::Inline(inline_envs) => {
+                        for (key, value) in inline_envs {
+                            resolved_envs.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(resolved_envs)
+    }
+
+    pub fn expand_env_vars(&self, envs: &HashMap<String, String>) -> HashMap<String, String> {
+        let mut expanded = HashMap::new();
+
+        for (key, value) in envs {
+            let expanded_value = self.expand_single_env_var(value);
+            expanded.insert(key.clone(), expanded_value);
+        }
+
+        expanded
+    }
+
+    fn expand_single_env_var(&self, value: &str) -> String {
+        let mut result = value.to_string();
+
+        // Simple regex-like replacement for ${VAR_NAME} patterns
+        while let Some(start) = result.find("${") {
+            if let Some(end) = result[start..].find('}') {
+                let var_name = &result[start + 2..start + end];
+                let replacement =
+                    std::env::var(var_name).unwrap_or_else(|_| format!("${{{var_name}}}"));
+                result.replace_range(start..start + end + 1, &replacement);
+            } else {
+                break;
+            }
+        }
+
+        result
+    }
 }
 
 #[cfg(test)]
@@ -375,6 +478,7 @@ mod tests {
             platform: "linux".to_string(),
             architecture: "x86_64".to_string(),
             provision: Some("provision.sh".to_string()),
+            provision_default: None,
         };
 
         let serialized = serde_json::to_value(&runtime).unwrap();
@@ -395,6 +499,7 @@ mod tests {
             platform: "linux".to_string(),
             architecture: "x86_64".to_string(),
             provision: None,
+            provision_default: None,
         };
 
         let serialized = serde_json::to_value(&runtime).unwrap();
@@ -435,5 +540,192 @@ mod tests {
         );
         assert_eq!(partition.size, 128);
         assert_eq!(partition.size_unit, "kibibytes");
+    }
+
+    #[test]
+    fn test_provision_profile_with_named_envs() {
+        let json_str = r#"{
+            "runtime": {
+                "platform": "avocado-raspberrypi4",
+                "architecture": "arm64",
+                "provision_default": "img"
+            },
+            "provision": {
+                "envs": {
+                    "device_info": {
+                        "AVOCADO_DEVICE_CERT": "${AVOCADO_DEVICE_CERT}",
+                        "AVOCADO_DEVICE_KEY": "${AVOCADO_DEVICE_KEY}",
+                        "AVOCADO_DEVICE_ID": "${AVOCADO_DEVICE_ID}"
+                    }
+                },
+                "profiles": {
+                    "img": {
+                        "script": "stone-provision-img.sh",
+                        "envs": ["device_info"]
+                    }
+                }
+            },
+            "storage_devices": {}
+        }"#;
+
+        let manifest: Manifest = serde_json::from_str(json_str).unwrap();
+
+        assert_eq!(manifest.runtime.provision_default, Some("img".to_string()));
+        assert!(manifest.provision.is_some());
+
+        let provision = manifest.provision.as_ref().unwrap();
+        let profile = provision.profiles.get("img").unwrap();
+        assert_eq!(profile.script, "stone-provision-img.sh");
+
+        let resolved_envs = provision.resolve_envs(profile).unwrap();
+        assert_eq!(resolved_envs.len(), 3);
+        assert!(resolved_envs.contains_key("AVOCADO_DEVICE_CERT"));
+        assert!(resolved_envs.contains_key("AVOCADO_DEVICE_KEY"));
+        assert!(resolved_envs.contains_key("AVOCADO_DEVICE_ID"));
+    }
+
+    #[test]
+    fn test_provision_profile_with_inline_envs() {
+        let json_str = r#"{
+            "runtime": {
+                "platform": "avocado-raspberrypi4",
+                "architecture": "arm64"
+            },
+            "provision": {
+                "profiles": {
+                    "test": {
+                        "script": "test.sh",
+                        "envs": [
+                            {"INLINE_VAR": "value1"},
+                            {"ANOTHER_VAR": "value2"}
+                        ]
+                    }
+                }
+            },
+            "storage_devices": {}
+        }"#;
+
+        let manifest: Manifest = serde_json::from_str(json_str).unwrap();
+        let provision = manifest.provision.as_ref().unwrap();
+        let profile = provision.profiles.get("test").unwrap();
+
+        let resolved_envs = provision.resolve_envs(profile).unwrap();
+        assert_eq!(resolved_envs.len(), 2);
+        assert_eq!(resolved_envs.get("INLINE_VAR"), Some(&"value1".to_string()));
+        assert_eq!(
+            resolved_envs.get("ANOTHER_VAR"),
+            Some(&"value2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_provision_profile_mixed_envs() {
+        let json_str = r#"{
+            "runtime": {
+                "platform": "avocado-raspberrypi4",
+                "architecture": "arm64"
+            },
+            "provision": {
+                "envs": {
+                    "base": {
+                        "BASE_VAR": "base_value",
+                        "OVERRIDE_ME": "original"
+                    }
+                },
+                "profiles": {
+                    "mixed": {
+                        "script": "mixed.sh",
+                        "envs": [
+                            "base",
+                            {"OVERRIDE_ME": "overridden", "INLINE_VAR": "inline_value"}
+                        ]
+                    }
+                }
+            },
+            "storage_devices": {}
+        }"#;
+
+        let manifest: Manifest = serde_json::from_str(json_str).unwrap();
+        let provision = manifest.provision.as_ref().unwrap();
+        let profile = provision.profiles.get("mixed").unwrap();
+
+        let resolved_envs = provision.resolve_envs(profile).unwrap();
+        assert_eq!(resolved_envs.len(), 3);
+        assert_eq!(
+            resolved_envs.get("BASE_VAR"),
+            Some(&"base_value".to_string())
+        );
+        assert_eq!(
+            resolved_envs.get("OVERRIDE_ME"),
+            Some(&"overridden".to_string())
+        );
+        assert_eq!(
+            resolved_envs.get("INLINE_VAR"),
+            Some(&"inline_value".to_string())
+        );
+    }
+
+    #[test]
+    fn test_provision_env_expansion() {
+        unsafe {
+            std::env::set_var("TEST_VAR", "expanded_value");
+        }
+
+        let provision = Provision {
+            envs: None,
+            profiles: HashMap::new(),
+        };
+
+        let mut test_envs = HashMap::new();
+        test_envs.insert("NORMAL_VAR".to_string(), "normal".to_string());
+        test_envs.insert("EXPANDED_VAR".to_string(), "${TEST_VAR}".to_string());
+        test_envs.insert(
+            "MIXED_VAR".to_string(),
+            "prefix_${TEST_VAR}_suffix".to_string(),
+        );
+
+        let expanded = provision.expand_env_vars(&test_envs);
+
+        assert_eq!(expanded.get("NORMAL_VAR"), Some(&"normal".to_string()));
+        assert_eq!(
+            expanded.get("EXPANDED_VAR"),
+            Some(&"expanded_value".to_string())
+        );
+        assert_eq!(
+            expanded.get("MIXED_VAR"),
+            Some(&"prefix_expanded_value_suffix".to_string())
+        );
+
+        unsafe {
+            std::env::remove_var("TEST_VAR");
+        }
+    }
+
+    #[test]
+    fn test_manifest_get_provision_profile() {
+        let json_str = r#"{
+            "runtime": {
+                "platform": "test",
+                "architecture": "x86_64",
+                "provision_default": "default_profile"
+            },
+            "provision": {
+                "profiles": {
+                    "profile1": {
+                        "script": "script1.sh"
+                    },
+                    "profile2": {
+                        "script": "script2.sh"
+                    }
+                }
+            },
+            "storage_devices": {}
+        }"#;
+
+        let manifest: Manifest = serde_json::from_str(json_str).unwrap();
+
+        assert!(manifest.get_provision_profile("profile1").is_some());
+        assert!(manifest.get_provision_profile("nonexistent").is_none());
+        assert_eq!(manifest.get_provision_default(), Some("default_profile"));
     }
 }

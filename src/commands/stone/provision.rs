@@ -90,10 +90,8 @@ pub fn provision_command(input_dir: &Path, verbose: bool) -> Result<(), String> 
         }
     }
 
-    // Execute provision script if specified in runtime
-    if let Some(provision_file) = &manifest.runtime.provision {
-        execute_provision_script(provision_file, input_dir, &build_dir, verbose)?;
-    }
+    // Execute provision script using profile-based approach
+    execute_provision_with_profile(&manifest, input_dir, &build_dir, verbose)?;
 
     log_success("Provision completed.");
     Ok(())
@@ -651,17 +649,99 @@ fn read_os_release_info(input_dir: &Path) -> Result<(String, String, String, Str
     Ok((version, codename, description, author))
 }
 
+fn execute_provision_with_profile(
+    manifest: &Manifest,
+    input_dir: &Path,
+    build_dir: &Path,
+    verbose: bool,
+) -> Result<(), String> {
+    // First check for legacy provision script in runtime
+    if let Some(provision_file) = &manifest.runtime.provision {
+        if manifest.provision.is_none() {
+            log_info("Using legacy provision script from runtime.provision.");
+            return execute_provision_script(
+                provision_file,
+                input_dir,
+                build_dir,
+                verbose,
+                &HashMap::new(),
+            );
+        }
+    }
+
+    // If no provision configuration exists, skip provision execution
+    let provision = match &manifest.provision {
+        Some(p) => p,
+        None => {
+            if verbose {
+                log_info("No provision configuration found, skipping provision execution.");
+            }
+            return Ok(());
+        }
+    };
+
+    // Get provision profile name from environment or default
+    let profile_name = std::env::var("AVOCADO_PROVISION_PROFILE").or_else(|_| {
+        manifest
+            .get_provision_default()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                "[ERROR] No provision profile specified and no default found.".to_string()
+            })
+    })?;
+
+    if verbose {
+        log_info(&format!("Using provision profile '{profile_name}'."));
+    }
+
+    // Get the specific profile
+    let profile = manifest
+        .get_provision_profile(&profile_name)
+        .ok_or_else(|| format!("[ERROR] Provision profile '{profile_name}' not found."))?;
+
+    // Resolve environment variables from the profile
+    let resolved_envs = provision.resolve_envs(profile)?;
+    let expanded_envs = provision.expand_env_vars(&resolved_envs);
+
+    if verbose {
+        log_info(&format!(
+            "Resolved {} environment variables from profile.",
+            expanded_envs.len()
+        ));
+        for (key, value) in &expanded_envs {
+            log_debug(&format!("  {key}={value}"));
+        }
+    }
+
+    // Execute the provision script
+    execute_provision_script(
+        &profile.script,
+        input_dir,
+        build_dir,
+        verbose,
+        &expanded_envs,
+    )
+}
+
 fn execute_provision_script(
     provision_file: &str,
     input_dir: &Path,
     build_dir: &Path,
     verbose: bool,
+    additional_envs: &HashMap<String, String>,
 ) -> Result<(), String> {
     let provision_path = input_dir.join(provision_file);
 
+    if verbose {
+        log_debug(&format!(
+            "Looking for provision script: {}",
+            provision_path.display()
+        ));
+    }
+
     if !provision_path.exists() {
         return Err(format!(
-            "Provision file '{provision_file}' not found in input directory."
+            "[ERROR] Provision file '{provision_file}' not found in input directory."
         ));
     }
 
@@ -673,17 +753,45 @@ fn execute_provision_script(
     let mut command = Command::new(&provision_path);
     command.current_dir(input_dir);
 
-    // Set environment variables for the provision script
-    let manifest_path = input_dir.join("manifest.json");
+    if verbose {
+        log_debug(&format!(
+            "Command working directory: {}",
+            input_dir.display()
+        ));
+        log_debug(&format!("Command executable: {}", provision_path.display()));
+    }
+
+    // Set default environment variables for the provision script
+    let manifest_path = input_dir
+        .join("manifest.json")
+        .canonicalize()
+        .map_err(|e| format!("[ERROR] Failed to resolve manifest path: {e}"))?;
+    let build_dir_canonical = build_dir
+        .canonicalize()
+        .map_err(|e| format!("[ERROR] Failed to resolve build directory path: {e}"))?;
+    let input_dir_canonical = input_dir
+        .canonicalize()
+        .map_err(|e| format!("[ERROR] Failed to resolve input directory path: {e}"))?;
     command.env("AVOCADO_STONE_MANIFEST", manifest_path);
-    command.env("AVOCADO_STONE_BUILD_DIR", build_dir);
-    command.env("AVOCADO_STONE_DATA_DIR", input_dir);
+    command.env("AVOCADO_STONE_BUILD_DIR", build_dir_canonical);
+    command.env("AVOCADO_STONE_DATA_DIR", input_dir_canonical);
+
+    // Set additional environment variables from the profile
+    for (key, value) in additional_envs {
+        command.env(key, value);
+    }
 
     if verbose {
         log_debug(&format!(
             "Running provision script: {}",
             provision_path.display()
         ));
+        if !additional_envs.is_empty() {
+            log_debug(&format!(
+                "With {} additional environment variables.",
+                additional_envs.len()
+            ));
+        }
     }
 
     command.stdout(Stdio::piped());
