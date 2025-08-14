@@ -136,6 +136,20 @@ pub fn create_command(
         }
     }
 
+    // Copy provision profile scripts
+    if let Some(provision) = &manifest.provision {
+        for (profile_name, profile) in &provision.profiles {
+            let script_input_path = input_dir.join(&profile.script);
+            let script_output_path = output_dir.join(&profile.script);
+            if let Err(e) = copy_file(&script_input_path, &script_output_path, verbose) {
+                errors.push(format!(
+                    "Failed to copy provision profile script '{}' for profile '{profile_name}': {e}",
+                    profile.script
+                ));
+            }
+        }
+    }
+
     // Copy the manifest file to the output directory as manifest.json
     let manifest_output_path = output_dir.join("manifest.json");
     if let Err(e) = copy_file(manifest_path, &manifest_output_path, verbose) {

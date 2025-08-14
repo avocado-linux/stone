@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::str;
 use tempfile::TempDir;
 
 #[test]
@@ -255,4 +256,154 @@ fn test_create_skips_object_images_with_out_field() {
     // Verify standard files are copied
     assert!(output_path.join("manifest.json").exists());
     assert!(output_path.join("os-release").exists());
+}
+
+#[test]
+fn test_create_with_provision_profiles() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path().join("input");
+    let output_path = temp_dir.path().join("output");
+
+    fs::create_dir_all(&input_path).unwrap();
+    fs::create_dir_all(&output_path).unwrap();
+
+    // Create a manifest with provision profiles
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "simple.img"
+                },
+                "partitions": []
+            }
+        },
+        "provision": {
+            "profiles": {
+                "development": {
+                    "script": "dev_provision.sh"
+                },
+                "production": {
+                    "script": "scripts/prod_provision.sh"
+                }
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(input_path.join("simple.img"), "test content").unwrap();
+    fs::write(input_path.join("os-release"), "NAME=Test\nVERSION_ID=1.0").unwrap();
+
+    // Create provision profile scripts
+    fs::write(
+        input_path.join("dev_provision.sh"),
+        "#!/bin/bash\necho 'dev provisioning'",
+    )
+    .unwrap();
+    fs::create_dir_all(input_path.join("scripts")).unwrap();
+    fs::write(
+        input_path.join("scripts/prod_provision.sh"),
+        "#!/bin/bash\necho 'prod provisioning'",
+    )
+    .unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "create",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--os-release",
+            &input_path.join("os-release").to_string_lossy(),
+            "--output-dir",
+            &output_path.to_string_lossy(),
+            "--input-dir",
+            &input_path.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    // Check that provision profile scripts were copied
+    assert!(output_path.join("dev_provision.sh").exists());
+    assert!(output_path.join("scripts/prod_provision.sh").exists());
+
+    // Check that the manifest file was copied
+    assert!(output_path.join("manifest.json").exists());
+
+    // Check that the OS release file was copied
+    assert!(output_path.join("os-release").exists());
+
+    // Check that the image file was copied
+    assert!(output_path.join("simple.img").exists());
+}
+
+#[test]
+fn test_create_with_missing_provision_profile_script() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path().join("input");
+    let output_path = temp_dir.path().join("output");
+
+    fs::create_dir_all(&input_path).unwrap();
+    fs::create_dir_all(&output_path).unwrap();
+
+    // Create a manifest with provision profiles but missing script file
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "simple.img"
+                },
+                "partitions": []
+            }
+        },
+        "provision": {
+            "profiles": {
+                "development": {
+                    "script": "missing_script.sh"
+                }
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(input_path.join("simple.img"), "test content").unwrap();
+    fs::write(input_path.join("os-release"), "NAME=Test\nVERSION_ID=1.0").unwrap();
+
+    // Don't create the provision profile script file to test the error case
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "create",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--os-release",
+            &input_path.join("os-release").to_string_lossy(),
+            "--output-dir",
+            &output_path.to_string_lossy(),
+            "--input-dir",
+            &input_path.to_string_lossy(),
+        ])
+        .assert()
+        .failure()
+        .stdout(str::contains(
+            "Failed to copy provision profile script 'missing_script.sh' for profile 'development'",
+        ));
 }
