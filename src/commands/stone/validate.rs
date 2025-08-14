@@ -45,6 +45,7 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
     // Validate all files referenced in the manifest
     let mut missing_files = Vec::new();
     let mut missing_device_files = Vec::new();
+    let mut missing_provision_files = Vec::new();
 
     // Check if provision file exists if specified in runtime
     if let Some(provision_file) = &manifest.runtime.provision {
@@ -56,6 +57,37 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
                 provision_file.clone(),
             ));
         }
+    }
+
+    // Check provision profiles and their scripts
+    if let Some(provision) = &manifest.provision {
+        for (profile_name, profile) in &provision.profiles {
+            let script_path = input_dir.join(&profile.script);
+            if !script_path.exists() {
+                missing_provision_files
+                    .push((format!("Profile '{profile_name}'"), profile.script.clone()));
+            }
+        }
+
+        // Check if provision_default references a valid profile
+        if let Some(default_profile_name) = &manifest.runtime.provision_default {
+            if manifest
+                .get_provision_profile(default_profile_name)
+                .is_none()
+            {
+                missing_provision_files.push((
+                    "Default profile reference".to_string(),
+                    format!("Profile '{default_profile_name}' not found in provision.profiles"),
+                ));
+            }
+            // Note: We don't check if the default profile's script exists here
+            // because that will already be caught when validating all profiles above
+        }
+    } else if manifest.runtime.provision_default.is_some() {
+        missing_provision_files.push((
+            "Default profile reference".to_string(),
+            "provision_default specified but no provision section found".to_string(),
+        ));
     }
 
     // Process each storage device
@@ -146,9 +178,19 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
     }
 
     // Report results
-    if !missing_files.is_empty() || !missing_device_files.is_empty() {
-        let total_missing = missing_files.len() + missing_device_files.len();
+    if !missing_files.is_empty()
+        || !missing_device_files.is_empty()
+        || !missing_provision_files.is_empty()
+    {
+        let total_missing =
+            missing_files.len() + missing_device_files.len() + missing_provision_files.len();
         let mut error_msg = format!("Validation failed. {total_missing} file(s) not found:");
+
+        // Report missing provision files
+        for (provision_type, filename) in missing_provision_files {
+            error_msg.push_str(&format!("\n  provision: {provision_type}"));
+            error_msg.push_str(&format!("\n    {filename}"));
+        }
 
         // Report missing device-level files
         for (device, filename) in missing_device_files {

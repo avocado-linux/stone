@@ -425,7 +425,9 @@ fn build_fwup_with_env_vars(
     }
 
     log_success(&format!(
-        "Created firmware package '{}' using configuration '{}'.",
+        "Created firmware package using configuration:
+  package: '{}'
+  configuration: '{}'",
         output_path.display(),
         template_path.display()
     ));
