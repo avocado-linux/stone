@@ -316,9 +316,12 @@ impl Provision {
         while let Some(start) = result.find("${") {
             if let Some(end) = result[start..].find('}') {
                 let var_name = &result[start + 2..start + end];
-                let replacement =
-                    std::env::var(var_name).unwrap_or_else(|_| format!("${{{var_name}}}"));
-                result.replace_range(start..start + end + 1, &replacement);
+                if let Ok(replacement) = std::env::var(var_name) {
+                    result.replace_range(start..start + end + 1, &replacement);
+                } else {
+                    // If env var not found, skip this occurrence to avoid infinite loop
+                    break;
+                }
             } else {
                 break;
             }
@@ -699,6 +702,36 @@ mod tests {
         unsafe {
             std::env::remove_var("TEST_VAR");
         }
+    }
+
+    #[test]
+    fn test_provision_env_expansion_undefined_vars() {
+        let provision = Provision {
+            envs: None,
+            profiles: HashMap::new(),
+        };
+
+        let mut test_envs = HashMap::new();
+        test_envs.insert(
+            "UNDEFINED_VAR".to_string(),
+            "${NONEXISTENT_VAR}".to_string(),
+        );
+        test_envs.insert(
+            "MIXED_UNDEFINED".to_string(),
+            "prefix_${NONEXISTENT_VAR}_suffix".to_string(),
+        );
+
+        let expanded = provision.expand_env_vars(&test_envs);
+
+        // Should not hang and should leave undefined vars unchanged
+        assert_eq!(
+            expanded.get("UNDEFINED_VAR"),
+            Some(&"${NONEXISTENT_VAR}".to_string())
+        );
+        assert_eq!(
+            expanded.get("MIXED_UNDEFINED"),
+            Some(&"prefix_${NONEXISTENT_VAR}_suffix".to_string())
+        );
     }
 
     #[test]
