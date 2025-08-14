@@ -1,6 +1,6 @@
 [package]
 name = "stone"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2024"
 description = "A CLI for managing Avocado stones."
 homepage = "https://github.com/avocado-linux/stone"
