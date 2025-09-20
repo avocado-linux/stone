@@ -70,19 +70,18 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
         }
 
         // Check if provision_default references a valid profile
-        if let Some(default_profile_name) = &manifest.runtime.provision_default {
-            if manifest
+        if let Some(default_profile_name) = &manifest.runtime.provision_default
+            && manifest
                 .get_provision_profile(default_profile_name)
                 .is_none()
-            {
-                missing_provision_files.push((
-                    "Default profile reference".to_string(),
-                    format!("Profile '{default_profile_name}' not found in provision.profiles"),
-                ));
-            }
-            // Note: We don't check if the default profile's script exists here
-            // because that will already be caught when validating all profiles above
+        {
+            missing_provision_files.push((
+                "Default profile reference".to_string(),
+                format!("Profile '{default_profile_name}' not found in provision.profiles"),
+            ));
         }
+        // Note: We don't check if the default profile's script exists here
+        // because that will already be caught when validating all profiles above
     } else if manifest.runtime.provision_default.is_some() {
         missing_provision_files.push((
             "Default profile reference".to_string(),
@@ -93,12 +92,12 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
     // Process each storage device
     for (device_name, device) in &manifest.storage_devices {
         // Check fwup template file if device has fwup build args
-        if let Some(build_args) = &device.build_args {
-            if let Some(template) = build_args.fwup_template() {
-                let template_path = input_dir.join(template);
-                if !template_path.exists() {
-                    missing_device_files.push((device_name.clone(), template.to_string()));
-                }
+        if let Some(build_args) = &device.build_args
+            && let Some(template) = build_args.fwup_template()
+        {
+            let template_path = input_dir.join(template);
+            if !template_path.exists() {
+                missing_device_files.push((device_name.clone(), template.to_string()));
             }
         }
 
@@ -114,20 +113,18 @@ pub fn validate_command(manifest_path: &Path, input_dir: &Path) -> Result<(), St
             }
 
             // For fwup builds, check if template file exists
-            if let Some(build_type) = image.build() {
-                if build_type == "fwup" {
-                    if let Some(build_args) = image.build_args() {
-                        if let Some(template) = build_args.fwup_template() {
-                            let template_path = input_dir.join(template);
-                            if !template_path.exists() {
-                                missing_files.push((
-                                    device_name.clone(),
-                                    image_name.clone(),
-                                    template.to_string(),
-                                ));
-                            }
-                        }
-                    }
+            if let Some(build_type) = image.build()
+                && build_type == "fwup"
+                && let Some(build_args) = image.build_args()
+                && let Some(template) = build_args.fwup_template()
+            {
+                let template_path = input_dir.join(template);
+                if !template_path.exists() {
+                    missing_files.push((
+                        device_name.clone(),
+                        image_name.clone(),
+                        template.to_string(),
+                    ));
                 }
             }
 

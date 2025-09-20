@@ -658,17 +658,17 @@ fn execute_provision_with_profile(
     verbose: bool,
 ) -> Result<(), String> {
     // First check for legacy provision script in runtime
-    if let Some(provision_file) = &manifest.runtime.provision {
-        if manifest.provision.is_none() {
-            log_info("Using legacy provision script from runtime.provision.");
-            return execute_provision_script(
-                provision_file,
-                input_dir,
-                build_dir,
-                verbose,
-                &HashMap::new(),
-            );
-        }
+    if let Some(provision_file) = &manifest.runtime.provision
+        && manifest.provision.is_none()
+    {
+        log_info("Using legacy provision script from runtime.provision.");
+        return execute_provision_script(
+            provision_file,
+            input_dir,
+            build_dir,
+            verbose,
+            &HashMap::new(),
+        );
     }
 
     // If no provision configuration exists, skip provision execution

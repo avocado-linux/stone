@@ -58,14 +58,14 @@ pub fn create_firmware_package(options: &FwupOptions) -> Result<(), String> {
     }
 
     // Create output directory if it doesn't exist
-    if let Some(parent) = options.output_file.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            return Err(format!(
-                "Failed to create output directory '{}': {}",
-                parent.display(),
-                e
-            ));
-        }
+    if let Some(parent) = options.output_file.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return Err(format!(
+            "Failed to create output directory '{}': {}",
+            parent.display(),
+            e
+        ));
     }
 
     // Build the fwup command

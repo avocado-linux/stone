@@ -96,15 +96,15 @@ pub fn create_command(
         log_info(&format!("Processing storage device '{device_name}'."));
 
         // Copy fwup template file if device has fwup build args
-        if let Some(build_args) = &device.build_args {
-            if let Some(template) = build_args.fwup_template() {
-                let input_path = input_dir.join(template);
-                let output_path = output_dir.join(template);
-                if let Err(e) = copy_file(&input_path, &output_path, verbose) {
-                    errors.push(format!(
-                        "Failed to copy fwup template '{template}' for device '{device_name}': {e}"
-                    ));
-                }
+        if let Some(build_args) = &device.build_args
+            && let Some(template) = build_args.fwup_template()
+        {
+            let input_path = input_dir.join(template);
+            let output_path = output_dir.join(template);
+            if let Err(e) = copy_file(&input_path, &output_path, verbose) {
+                errors.push(format!(
+                    "Failed to copy fwup template '{template}' for device '{device_name}': {e}"
+                ));
             }
         }
 
@@ -192,15 +192,15 @@ fn process_image(
     log_info(&format!("Processing image '{image_name}'."));
 
     // Copy fwup template file if image has fwup build args
-    if let Some(build_args) = image.build_args() {
-        if let Some(template) = build_args.fwup_template() {
-            let input_path = input_dir.join(template);
-            let output_path = output_dir.join(template);
-            if let Err(e) = copy_file(&input_path, &output_path, verbose) {
-                return Err(format!(
-                    "Failed to copy fwup template '{template}' for image '{image_name}': {e}"
-                ));
-            }
+    if let Some(build_args) = image.build_args()
+        && let Some(template) = build_args.fwup_template()
+    {
+        let input_path = input_dir.join(template);
+        let output_path = output_dir.join(template);
+        if let Err(e) = copy_file(&input_path, &output_path, verbose) {
+            return Err(format!(
+                "Failed to copy fwup template '{template}' for image '{image_name}': {e}"
+            ));
         }
     }
 
@@ -259,14 +259,14 @@ fn copy_file(input_path: &Path, output_path: &Path, verbose: bool) -> Result<(),
     }
 
     // Create output directory if it doesn't exist
-    if let Some(parent) = output_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            return Err(format!(
-                "Failed to create output directory '{}': {}",
-                parent.display(),
-                e
-            ));
-        }
+    if let Some(parent) = output_path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return Err(format!(
+            "Failed to create output directory '{}': {}",
+            parent.display(),
+            e
+        ));
     }
 
     // Copy the file
