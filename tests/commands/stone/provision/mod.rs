@@ -370,6 +370,94 @@ VENDOR_NAME="Avocado Linux""#;
 }
 
 #[test]
+fn test_provision_preserves_all_tty_streams_for_interactive_scripts() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create a minimal manifest with provision field
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch",
+            "provision": "provision.sh"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "simple.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+    fs::write(input_path.join("simple.img"), "test content").unwrap();
+
+    // Create provision script that tests read builtin functionality and output streams
+    let provision_script = r#"#!/bin/bash
+# Test stdout output - should appear in stone's stdout
+echo "STDOUT: Script is running"
+
+# Test stderr output - should appear in stone's stderr
+echo "STDERR: Script error message" >&2
+
+# Test that read builtin works and prompt appears - this was broken by mixed TTY state
+echo "Testing read functionality..." > tty_test_output.txt
+echo -n "Enter test value: " >&2
+read response
+echo "read completed with response: $response" >> tty_test_output.txt
+
+echo "provision script completed" >> tty_test_output.txt
+exit 0
+"#;
+    fs::write(input_path.join("provision.sh"), provision_script).unwrap();
+
+    // Make the script executable (on Unix systems)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(input_path.join("provision.sh"))
+            .unwrap()
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(input_path.join("provision.sh"), perms).unwrap();
+    }
+
+    // Create os-release file for AVOCADO_OS_VERSION
+    let os_release_content = r#"NAME="Avocado Linux"
+VERSION="1.0.0"
+ID=avocado
+VERSION_ID="1.0.0"
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .write_stdin("test_input\n")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("STDOUT: Script is running"))
+        .stderr(predicates::str::contains("STDERR: Script error message"))
+        .stderr(predicates::str::contains("Enter test value: "));
+
+    // Check that read builtin works and captures input properly
+    assert!(input_path.join("tty_test_output.txt").exists());
+    let output_content = fs::read_to_string(input_path.join("tty_test_output.txt")).unwrap();
+    assert!(output_content.contains("read completed with response: test_input"));
+}
+
+#[test]
 fn test_provision_with_failing_provision_script() {
     let temp_dir = TempDir::new().unwrap();
     let input_path = temp_dir.path();

@@ -5,9 +5,9 @@ use clap::Args;
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Args, Debug)]
 pub struct ProvisionArgs {
@@ -796,41 +796,14 @@ fn execute_provision_script(
         }
     }
 
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
     let mut child = command
         .spawn()
         .map_err(|e| format!("Failed to execute provision script '{provision_file}': {e}"))?;
-
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-
-    let stdout_reader = BufReader::new(stdout);
-    let stderr_reader = BufReader::new(stderr);
-
-    // Stream stdout in real-time
-    let stdout_handle = std::thread::spawn(move || {
-        for line in stdout_reader.lines().map_while(Result::ok) {
-            println!("{line}");
-        }
-    });
-
-    // Stream stderr in real-time
-    let stderr_handle = std::thread::spawn(move || {
-        for line in stderr_reader.lines().map_while(Result::ok) {
-            eprintln!("{line}");
-        }
-    });
 
     // Wait for the process to complete
     let status = child
         .wait()
         .map_err(|e| format!("Failed to wait for provision script '{provision_file}': {e}"))?;
-
-    // Wait for the output threads to complete
-    let _ = stdout_handle.join();
-    let _ = stderr_handle.join();
 
     if !status.success() {
         return Err(format!(
