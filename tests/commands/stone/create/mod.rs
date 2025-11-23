@@ -407,3 +407,190 @@ fn test_create_with_missing_provision_profile_script() {
             "Failed to copy provision profile script 'missing_script.sh' for profile 'development'",
         ));
 }
+
+#[test]
+fn test_create_with_multiple_input_dirs_priority() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+    let output_path = temp_dir.path().join("output");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+    fs::create_dir_all(&output_path).unwrap();
+
+    // Create a manifest that references test.img
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "test.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path1.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(input_path1.join("os-release"), "NAME=Test\nVERSION_ID=1.0").unwrap();
+
+    // Create test.img with different content in both directories
+    // input1 has higher priority (specified first)
+    fs::write(input_path1.join("test.img"), "content from input1").unwrap();
+    fs::write(input_path2.join("test.img"), "content from input2").unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "create",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--os-release",
+            &input_path1.join("os-release").to_string_lossy(),
+            "--output-dir",
+            &output_path.to_string_lossy(),
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    // Verify that the file from input1 (higher priority) was used
+    let output_content = fs::read_to_string(output_path.join("test.img")).unwrap();
+    assert_eq!(
+        output_content, "content from input1",
+        "Should use file from first input directory (higher priority)"
+    );
+}
+
+#[test]
+fn test_create_with_multiple_input_dirs_fallback() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+    let output_path = temp_dir.path().join("output");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+    fs::create_dir_all(&output_path).unwrap();
+
+    // Create a manifest that references test.img
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "test.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path1.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(input_path1.join("os-release"), "NAME=Test\nVERSION_ID=1.0").unwrap();
+
+    // Only create test.img in input2 (second priority)
+    fs::write(input_path2.join("test.img"), "content from input2").unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "create",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--os-release",
+            &input_path1.join("os-release").to_string_lossy(),
+            "--output-dir",
+            &output_path.to_string_lossy(),
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    // Verify that the file from input2 was used as fallback
+    let output_content = fs::read_to_string(output_path.join("test.img")).unwrap();
+    assert_eq!(
+        output_content, "content from input2",
+        "Should fall back to second input directory when file not in first"
+    );
+}
+
+#[test]
+fn test_create_with_multiple_input_dirs_not_found() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+    let output_path = temp_dir.path().join("output");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+    fs::create_dir_all(&output_path).unwrap();
+
+    // Create a manifest that references test.img
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "test.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path1.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(input_path1.join("os-release"), "NAME=Test\nVERSION_ID=1.0").unwrap();
+
+    // Don't create test.img in either directory
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "create",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--os-release",
+            &input_path1.join("os-release").to_string_lossy(),
+            "--output-dir",
+            &output_path.to_string_lossy(),
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .failure()
+        .stdout(str::contains("not found in any input directory"));
+}

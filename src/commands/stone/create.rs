@@ -19,14 +19,14 @@ pub struct CreateArgs {
     #[arg(long = "os-release", value_name = "PATH")]
     pub os_release: PathBuf,
 
-    /// Path to the input directory
+    /// Path to the input directory (can be specified multiple times for search priority)
     #[arg(
         short = 'i',
         long = "input-dir",
         value_name = "DIR",
         default_value = "."
     )]
-    pub input_dir: PathBuf,
+    pub input_dirs: Vec<PathBuf>,
 
     /// Path to the output directory
     #[arg(
@@ -47,17 +47,28 @@ impl CreateArgs {
         create_command(
             &self.manifest,
             &self.os_release,
-            &self.input_dir,
+            &self.input_dirs,
             &self.output_dir,
             self.verbose,
         )
     }
 }
 
+/// Helper function to find a file in multiple input directories, searching in order
+fn find_file_in_dirs(filename: &str, input_dirs: &[PathBuf]) -> Option<PathBuf> {
+    for dir in input_dirs {
+        let candidate = dir.join(filename);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 pub fn create_command(
     manifest_path: &Path,
     os_release_path: &Path,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     output_dir: &PathBuf,
     verbose: bool,
 ) -> Result<(), String> {
@@ -99,12 +110,20 @@ pub fn create_command(
         if let Some(build_args) = &device.build_args
             && let Some(template) = build_args.fwup_template()
         {
-            let input_path = input_dir.join(template);
-            let output_path = output_dir.join(template);
-            if let Err(e) = copy_file(&input_path, &output_path, verbose) {
-                errors.push(format!(
-                    "Failed to copy fwup template '{template}' for device '{device_name}': {e}"
-                ));
+            match find_file_in_dirs(template, input_dirs) {
+                Some(input_path) => {
+                    let output_path = output_dir.join(template);
+                    if let Err(e) = copy_file(&input_path, &output_path, verbose) {
+                        errors.push(format!(
+                            "Failed to copy fwup template '{template}' for device '{device_name}': {e}"
+                        ));
+                    }
+                }
+                None => {
+                    errors.push(format!(
+                        "fwup template '{template}' for device '{device_name}' not found in any input directory"
+                    ));
+                }
             }
         }
 
@@ -114,7 +133,7 @@ pub fn create_command(
                 device_name,
                 image_name,
                 image,
-                input_dir,
+                input_dirs,
                 output_dir,
                 verbose,
             ) {
@@ -127,25 +146,42 @@ pub fn create_command(
 
     // Copy the provision file if specified in runtime
     if let Some(provision_file) = &manifest.runtime.provision {
-        let provision_input_path = input_dir.join(provision_file);
-        let provision_output_path = output_dir.join(provision_file);
-        if let Err(e) = copy_file(&provision_input_path, &provision_output_path, verbose) {
-            errors.push(format!(
-                "Failed to copy provision file '{provision_file}': {e}"
-            ));
+        match find_file_in_dirs(provision_file, input_dirs) {
+            Some(provision_input_path) => {
+                let provision_output_path = output_dir.join(provision_file);
+                if let Err(e) = copy_file(&provision_input_path, &provision_output_path, verbose) {
+                    errors.push(format!(
+                        "Failed to copy provision file '{provision_file}': {e}"
+                    ));
+                }
+            }
+            None => {
+                errors.push(format!(
+                    "Provision file '{provision_file}' not found in any input directory"
+                ));
+            }
         }
     }
 
     // Copy provision profile scripts
     if let Some(provision) = &manifest.provision {
         for (profile_name, profile) in &provision.profiles {
-            let script_input_path = input_dir.join(&profile.script);
-            let script_output_path = output_dir.join(&profile.script);
-            if let Err(e) = copy_file(&script_input_path, &script_output_path, verbose) {
-                errors.push(format!(
-                    "Failed to copy provision profile script '{}' for profile '{profile_name}': {e}",
-                    profile.script
-                ));
+            match find_file_in_dirs(&profile.script, input_dirs) {
+                Some(script_input_path) => {
+                    let script_output_path = output_dir.join(&profile.script);
+                    if let Err(e) = copy_file(&script_input_path, &script_output_path, verbose) {
+                        errors.push(format!(
+                            "Failed to copy provision profile script '{}' for profile '{profile_name}': {e}",
+                            profile.script
+                        ));
+                    }
+                }
+                None => {
+                    errors.push(format!(
+                        "Failed to copy provision profile script '{}' for profile '{profile_name}': not found in any input directory",
+                        profile.script
+                    ));
+                }
             }
         }
     }
@@ -185,7 +221,7 @@ fn process_image(
     _device_name: &str,
     image_name: &str,
     image: &crate::manifest::Image,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     output_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
@@ -195,12 +231,20 @@ fn process_image(
     if let Some(build_args) = image.build_args()
         && let Some(template) = build_args.fwup_template()
     {
-        let input_path = input_dir.join(template);
-        let output_path = output_dir.join(template);
-        if let Err(e) = copy_file(&input_path, &output_path, verbose) {
-            return Err(format!(
-                "Failed to copy fwup template '{template}' for image '{image_name}': {e}"
-            ));
+        match find_file_in_dirs(template, input_dirs) {
+            Some(input_path) => {
+                let output_path = output_dir.join(template);
+                if let Err(e) = copy_file(&input_path, &output_path, verbose) {
+                    return Err(format!(
+                        "Failed to copy fwup template '{template}' for image '{image_name}': {e}"
+                    ));
+                }
+            }
+            None => {
+                return Err(format!(
+                    "fwup template '{template}' for image '{image_name}' not found in any input directory"
+                ));
+            }
         }
     }
 
@@ -208,7 +252,7 @@ fn process_image(
     let files = image.files();
     if !files.is_empty() {
         for file_entry in files {
-            if let Err(e) = process_file_entry(file_entry, input_dir, output_dir, verbose) {
+            if let Err(e) = process_file_entry(file_entry, input_dirs, output_dir, verbose) {
                 return Err(format!(
                     "Failed to process file in image '{image_name}': {e}"
                 ));
@@ -221,9 +265,15 @@ fn process_image(
     match image {
         crate::manifest::Image::String(filename) => {
             // This is an input file that should be copied
-            let input_path = input_dir.join(filename);
-            let output_path = output_dir.join(filename);
-            copy_file(&input_path, &output_path, verbose)
+            match find_file_in_dirs(filename, input_dirs) {
+                Some(input_path) => {
+                    let output_path = output_dir.join(filename);
+                    copy_file(&input_path, &output_path, verbose)
+                }
+                None => Err(format!(
+                    "Image file '{filename}' for image '{image_name}' not found in any input directory"
+                )),
+            }
         }
         crate::manifest::Image::Object { out, .. } => {
             // This is an output file that will be generated during provision
@@ -240,16 +290,21 @@ fn process_image(
 
 fn process_file_entry(
     file_entry: &crate::manifest::FileEntry,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     output_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
     let input_filename = file_entry.input_filename();
 
-    let input_path = input_dir.join(input_filename);
-    let output_path = output_dir.join(input_filename);
-
-    copy_file(&input_path, &output_path, verbose)
+    match find_file_in_dirs(input_filename, input_dirs) {
+        Some(input_path) => {
+            let output_path = output_dir.join(input_filename);
+            copy_file(&input_path, &output_path, verbose)
+        }
+        None => Err(format!(
+            "File '{input_filename}' not found in any input directory"
+        )),
+    }
 }
 
 fn copy_file(input_path: &Path, output_path: &Path, verbose: bool) -> Result<(), String> {

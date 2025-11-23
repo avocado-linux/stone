@@ -478,3 +478,160 @@ fn test_validate_missing_provision_default_script() {
         .failure()
         .stdout(contains("missing_default.sh"));
 }
+
+#[test]
+fn test_validate_with_multiple_input_dirs_priority() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+
+    // Create a manifest that references test.img
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "test.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path1.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+
+    // Create test.img in both directories
+    fs::write(input_path1.join("test.img"), "content from input1").unwrap();
+    fs::write(input_path2.join("test.img"), "content from input2").unwrap();
+
+    // Validation should succeed because file exists (in first directory)
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_validate_with_multiple_input_dirs_fallback() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+
+    // Create a manifest that references test.img
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "test.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path1.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+
+    // Only create test.img in input2 (second priority)
+    fs::write(input_path2.join("test.img"), "content from input2").unwrap();
+
+    // Validation should succeed because file exists in second directory
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_validate_with_multiple_input_dirs_not_found() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+
+    // Create a manifest that references test.img
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "test.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path1.join("manifest.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+
+    // Don't create test.img in either directory
+
+    // Validation should fail because file doesn't exist in any directory
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .failure()
+        .stdout(contains("test.img"));
+}

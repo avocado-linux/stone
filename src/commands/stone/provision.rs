@@ -11,14 +11,14 @@ use std::process::Command;
 
 #[derive(Args, Debug)]
 pub struct ProvisionArgs {
-    /// Path to the input directory containing manifest.json
+    /// Path to the input directory containing manifest.json (can be specified multiple times for search priority)
     #[arg(
         short = 'i',
         long = "input-dir",
         value_name = "DIR",
         default_value = "."
     )]
-    pub input_dir: PathBuf,
+    pub input_dirs: Vec<PathBuf>,
 
     /// Enable verbose output
     #[arg(short = 'v', long = "verbose")]
@@ -27,12 +27,28 @@ pub struct ProvisionArgs {
 
 impl ProvisionArgs {
     pub fn execute(&self) -> Result<(), String> {
-        provision_command(&self.input_dir, self.verbose)
+        provision_command(&self.input_dirs, self.verbose)
     }
 }
 
-pub fn provision_command(input_dir: &Path, verbose: bool) -> Result<(), String> {
-    // Find manifest.json in the input directory
+/// Helper function to find a file in multiple input directories, searching in order
+fn find_file_in_dirs(filename: &str, input_dirs: &[PathBuf]) -> Option<PathBuf> {
+    for dir in input_dirs {
+        let candidate = dir.join(filename);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub fn provision_command(input_dirs: &[PathBuf], verbose: bool) -> Result<(), String> {
+    // Use the first input directory as the primary directory
+    let input_dir = input_dirs
+        .first()
+        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
+
+    // Find manifest.json in the first input directory
     let manifest_path = input_dir.join("manifest.json");
     if !manifest_path.exists() {
         return Err(format!(
@@ -70,7 +86,7 @@ pub fn provision_command(input_dir: &Path, verbose: bool) -> Result<(), String> 
                 device_name,
                 image_name,
                 image,
-                input_dir,
+                input_dirs,
                 &build_dir,
                 verbose,
             )?;
@@ -83,7 +99,7 @@ pub fn provision_command(input_dir: &Path, verbose: bool) -> Result<(), String> 
                 device,
                 build_args,
                 &manifest,
-                input_dir,
+                input_dirs,
                 &build_dir,
                 verbose,
             )?;
@@ -91,7 +107,7 @@ pub fn provision_command(input_dir: &Path, verbose: bool) -> Result<(), String> 
     }
 
     // Execute provision script using profile-based approach
-    execute_provision_with_profile(&manifest, input_dir, &build_dir, verbose)?;
+    execute_provision_with_profile(&manifest, input_dirs, &build_dir, verbose)?;
 
     log_success("Provision completed.");
     Ok(())
@@ -102,7 +118,7 @@ fn build_storage_device(
     device: &crate::manifest::StorageDevice,
     build_args: &BuildArgs,
     manifest: &Manifest,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
@@ -117,7 +133,7 @@ fn build_storage_device(
                 device,
                 template,
                 manifest,
-                input_dir,
+                input_dirs,
                 build_dir,
                 verbose,
             )?;
@@ -134,7 +150,7 @@ fn build_image(
     device_name: &str,
     image_name: &str,
     image: &Image,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
@@ -166,12 +182,12 @@ fn build_image(
                 files,
                 size,
                 size_unit,
-                input_dir,
+                input_dirs,
                 build_dir,
                 verbose,
             }),
             BuildArgs::Fwup { template } => {
-                build_fwup_image(image_name, image, template, input_dir, build_dir, verbose)
+                build_fwup_image(image_name, image, template, input_dirs, build_dir, verbose)
             }
         },
         Image::Object {
@@ -195,7 +211,7 @@ struct FatImageParams<'a> {
     files: &'a [FileEntry],
     size: &'a i64,
     size_unit: &'a str,
-    input_dir: &'a Path,
+    input_dirs: &'a [PathBuf],
     build_dir: &'a Path,
     verbose: bool,
 }
@@ -230,10 +246,16 @@ fn build_fat_image(params: FatImageParams) -> Result<(), String> {
 
     let output_path = params.build_dir.join(params.out);
 
+    // Use the first input directory as the base path for FAT image
+    let base_path = params
+        .input_dirs
+        .first()
+        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
+
     // Create FAT image options
     let options = fat::FatImageOptions::new()
         .with_manifest_path(&temp_manifest_path)
-        .with_base_path(params.input_dir)
+        .with_base_path(base_path)
         .with_output_path(&output_path)
         .with_size_mebibytes(size_mb)
         .with_fat_type(fat_type)
@@ -255,7 +277,7 @@ fn build_fwup_image(
     image_name: &str,
     image: &Image,
     template: &str,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
@@ -264,7 +286,8 @@ fn build_fwup_image(
         "Building fwup image '{image_name}' -> '{out}' using template '{template}'."
     ));
 
-    let template_path = input_dir.join(template);
+    let template_path = find_file_in_dirs(template, input_dirs)
+        .ok_or_else(|| format!("fwup template '{template}' not found in any input directory"))?;
     let output_path = build_dir.join(out);
 
     let mut cmd = Command::new("fwup");
@@ -366,15 +389,17 @@ fn build_fwup_with_env_vars(
     device: &crate::manifest::StorageDevice,
     template: &str,
     manifest: &Manifest,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
-    let template_path = input_dir.join(template);
+    let template_path = find_file_in_dirs(template, input_dirs)
+        .ok_or_else(|| format!("fwup template '{template}' not found in any input directory"))?;
     let output_path = build_dir.join(&device.out);
 
     // Calculate environment variables from manifest
-    let env_vars = calculate_avocado_env_vars(device_name, device, manifest, input_dir, build_dir)?;
+    let env_vars =
+        calculate_avocado_env_vars(device_name, device, manifest, input_dirs, build_dir)?;
 
     let mut cmd = Command::new("fwup");
     cmd.arg("-c")
@@ -439,12 +464,17 @@ fn calculate_avocado_env_vars(
     _device_name: &str,
     device: &crate::manifest::StorageDevice,
     manifest: &Manifest,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
 ) -> Result<HashMap<String, String>, String> {
     let mut env_vars = HashMap::new();
 
     // No longer setting AVOCADO_SDK_RUNTIME_DIR - image paths are now absolute
+
+    // Use the first input directory as the primary directory
+    let input_dir = input_dirs
+        .first()
+        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
 
     // Meta Data - read from os-release file and manifest
     let (os_version, os_codename, os_description, os_author) = read_os_release_info(input_dir)?;
@@ -485,8 +515,13 @@ fn calculate_avocado_env_vars(
         // Determine the full path based on image type
         let image_path = match image {
             Image::String(filename) => {
-                // Input files are in the input directory
-                input_dir.join(filename).to_string_lossy().to_string()
+                // Input files - search in input directories
+                find_file_in_dirs(filename, input_dirs)
+                    .ok_or_else(|| {
+                        format!("Image file '{filename}' not found in any input directory")
+                    })?
+                    .to_string_lossy()
+                    .to_string()
             }
             Image::Object {
                 out,
@@ -501,8 +536,11 @@ fn calculate_avocado_env_vars(
                 build_args: None,
                 ..
             } => {
-                // Object files without build_args are input files in the input directory
-                input_dir.join(out).to_string_lossy().to_string()
+                // Object files without build_args are input files - search in input directories
+                find_file_in_dirs(out, input_dirs)
+                    .ok_or_else(|| format!("Image file '{out}' not found in any input directory"))?
+                    .to_string_lossy()
+                    .to_string()
             }
         };
 
@@ -653,7 +691,7 @@ fn read_os_release_info(input_dir: &Path) -> Result<(String, String, String, Str
 
 fn execute_provision_with_profile(
     manifest: &Manifest,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
@@ -664,7 +702,7 @@ fn execute_provision_with_profile(
         log_info("Using legacy provision script from runtime.provision.");
         return execute_provision_script(
             provision_file,
-            input_dir,
+            input_dirs,
             build_dir,
             verbose,
             &HashMap::new(),
@@ -718,7 +756,7 @@ fn execute_provision_with_profile(
     // Execute the provision script
     execute_provision_script(
         &profile.script,
-        input_dir,
+        input_dirs,
         build_dir,
         verbose,
         &expanded_envs,
@@ -727,23 +765,24 @@ fn execute_provision_with_profile(
 
 fn execute_provision_script(
     provision_file: &str,
-    input_dir: &Path,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
     additional_envs: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let provision_path = input_dir.join(provision_file);
+    // Use the first input directory as the primary directory
+    let input_dir = input_dirs
+        .first()
+        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
+
+    let provision_path = find_file_in_dirs(provision_file, input_dirs).ok_or_else(|| {
+        format!("[ERROR] Provision file '{provision_file}' not found in any input directory.")
+    })?;
 
     if verbose {
         log_debug(&format!(
             "Looking for provision script: {}",
             provision_path.display()
-        ));
-    }
-
-    if !provision_path.exists() {
-        return Err(format!(
-            "[ERROR] Provision file '{provision_file}' not found in input directory."
         ));
     }
 
