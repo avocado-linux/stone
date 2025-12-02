@@ -43,20 +43,17 @@ fn find_file_in_dirs(filename: &str, input_dirs: &[PathBuf]) -> Option<PathBuf> 
 }
 
 pub fn provision_command(input_dirs: &[PathBuf], verbose: bool) -> Result<(), String> {
-    // Use the first input directory as the primary directory
-    let input_dir = input_dirs
-        .first()
-        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
+    // Find manifest.json in the input directories
+    let manifest_path = find_file_in_dirs("manifest.json", input_dirs).ok_or_else(|| {
+        "Manifest file 'manifest.json' not found in any input directory.".to_string()
+    })?;
 
-    // Find manifest.json in the first input directory
-    let manifest_path = input_dir.join("manifest.json");
-    if !manifest_path.exists() {
-        return Err(format!(
-            "Manifest file 'manifest.json' not found in input directory '{}'.",
-            input_dir.display()
-        ));
-    }
     let manifest = Manifest::from_file(&manifest_path)?;
+
+    // Determine the directory containing the manifest
+    let input_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "Failed to determine manifest directory".to_string())?;
 
     if verbose {
         log_info(&format!("Found manifest in '{}'.", input_dir.display()));
@@ -107,7 +104,7 @@ pub fn provision_command(input_dirs: &[PathBuf], verbose: bool) -> Result<(), St
     }
 
     // Execute provision script using profile-based approach
-    execute_provision_with_profile(&manifest, input_dirs, &build_dir, verbose)?;
+    execute_provision_with_profile(&manifest, &manifest_path, input_dirs, &build_dir, verbose)?;
 
     log_success("Provision completed.");
     Ok(())
@@ -232,8 +229,8 @@ fn build_fat_image(params: FatImageParams) -> Result<(), String> {
         FatVariant::Fat32 => fat::FatType::Fat32,
     };
 
-    // Create a temporary manifest for the FAT builder
-    let fat_manifest = create_fat_manifest(params.files)?;
+    // Resolve all file paths across input directories and create manifest with absolute paths
+    let fat_manifest = create_fat_manifest_with_resolved_paths(params.files, params.input_dirs)?;
     let temp_manifest_path = params
         .build_dir
         .join(format!("temp_manifest_{}.json", params.image_name));
@@ -246,16 +243,13 @@ fn build_fat_image(params: FatImageParams) -> Result<(), String> {
 
     let output_path = params.build_dir.join(params.out);
 
-    // Use the first input directory as the base path for FAT image
-    let base_path = params
-        .input_dirs
-        .first()
-        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
+    // Use current directory as base since we're using absolute paths in the manifest
+    let base_path = PathBuf::from(".");
 
     // Create FAT image options
     let options = fat::FatImageOptions::new()
         .with_manifest_path(&temp_manifest_path)
-        .with_base_path(base_path)
+        .with_base_path(&base_path)
         .with_output_path(&output_path)
         .with_size_mebibytes(size_mb)
         .with_fat_type(fat_type)
@@ -363,20 +357,28 @@ fn convert_size_to_mb(size: i64, size_unit: &str) -> Result<u64, String> {
     Ok(size_mb.ceil() as u64)
 }
 
-fn create_fat_manifest(files: &[FileEntry]) -> Result<fat::Manifest, String> {
-    let fat_files: Vec<fat::FileEntry> = files
-        .iter()
-        .map(|entry| match entry {
-            FileEntry::String(filename) => fat::FileEntry {
-                filename: Some(filename.clone()),
-                output: None,
-            },
-            FileEntry::Object { input, output } => fat::FileEntry {
-                filename: Some(input.clone()),
-                output: Some(output.clone()),
-            },
-        })
-        .collect();
+fn create_fat_manifest_with_resolved_paths(
+    files: &[FileEntry],
+    input_dirs: &[PathBuf],
+) -> Result<fat::Manifest, String> {
+    let mut fat_files = Vec::new();
+
+    for entry in files {
+        let (input_filename, output_name) = match entry {
+            FileEntry::String(filename) => (filename.as_str(), None),
+            FileEntry::Object { input, output } => (input.as_str(), Some(output.clone())),
+        };
+
+        // Resolve the input file across all input directories
+        let resolved_path = find_file_in_dirs(input_filename, input_dirs).ok_or_else(|| {
+            format!("File '{input_filename}' not found in any input directory for FAT image")
+        })?;
+
+        fat_files.push(fat::FileEntry {
+            filename: Some(resolved_path.to_string_lossy().to_string()),
+            output: output_name,
+        });
+    }
 
     Ok(fat::Manifest {
         files: fat_files,
@@ -471,13 +473,8 @@ fn calculate_avocado_env_vars(
 
     // No longer setting AVOCADO_SDK_RUNTIME_DIR - image paths are now absolute
 
-    // Use the first input directory as the primary directory
-    let input_dir = input_dirs
-        .first()
-        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
-
     // Meta Data - read from os-release file and manifest
-    let (os_version, os_codename, os_description, os_author) = read_os_release_info(input_dir)?;
+    let (os_version, os_codename, os_description, os_author) = read_os_release_info(input_dirs)?;
     env_vars.insert("AVOCADO_OS_VERSION".to_string(), os_version);
     env_vars.insert("AVOCADO_OS_CODENAME".to_string(), os_codename);
     env_vars.insert("AVOCADO_OS_DESCRIPTION".to_string(), os_description);
@@ -626,15 +623,12 @@ fn convert_to_blocks(size: i64, unit: &str, block_size: u32) -> Result<u64, Stri
     Ok(bytes / (block_size as u64))
 }
 
-fn read_os_release_info(input_dir: &Path) -> Result<(String, String, String, String), String> {
-    let os_release_path = input_dir.join("os-release");
-
-    if !os_release_path.exists() {
-        return Err(format!(
-            "OS release file 'os-release' not found in input directory '{}'.",
-            input_dir.display()
-        ));
-    }
+fn read_os_release_info(
+    input_dirs: &[PathBuf],
+) -> Result<(String, String, String, String), String> {
+    let os_release_path = find_file_in_dirs("os-release", input_dirs).ok_or_else(|| {
+        "OS release file 'os-release' not found in any input directory.".to_string()
+    })?;
 
     let content = fs::read_to_string(&os_release_path).map_err(|e| {
         format!(
@@ -691,6 +685,7 @@ fn read_os_release_info(input_dir: &Path) -> Result<(String, String, String, Str
 
 fn execute_provision_with_profile(
     manifest: &Manifest,
+    manifest_path: &Path,
     input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
@@ -702,6 +697,7 @@ fn execute_provision_with_profile(
         log_info("Using legacy provision script from runtime.provision.");
         return execute_provision_script(
             provision_file,
+            manifest_path,
             input_dirs,
             build_dir,
             verbose,
@@ -756,6 +752,7 @@ fn execute_provision_with_profile(
     // Execute the provision script
     execute_provision_script(
         &profile.script,
+        manifest_path,
         input_dirs,
         build_dir,
         verbose,
@@ -765,19 +762,20 @@ fn execute_provision_with_profile(
 
 fn execute_provision_script(
     provision_file: &str,
+    manifest_path: &Path,
     input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
     additional_envs: &HashMap<String, String>,
 ) -> Result<(), String> {
-    // Use the first input directory as the primary directory
-    let input_dir = input_dirs
-        .first()
-        .ok_or_else(|| "At least one input directory must be specified".to_string())?;
-
     let provision_path = find_file_in_dirs(provision_file, input_dirs).ok_or_else(|| {
         format!("[ERROR] Provision file '{provision_file}' not found in any input directory.")
     })?;
+
+    // Use the directory containing the manifest as the working directory
+    let input_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "Failed to determine manifest directory".to_string())?;
 
     if verbose {
         log_debug(&format!(
@@ -803,8 +801,7 @@ fn execute_provision_script(
     }
 
     // Set default environment variables for the provision script
-    let manifest_path = input_dir
-        .join("manifest.json")
+    let manifest_path_canonical = manifest_path
         .canonicalize()
         .map_err(|e| format!("[ERROR] Failed to resolve manifest path: {e}"))?;
     let build_dir_canonical = build_dir
@@ -813,7 +810,7 @@ fn execute_provision_script(
     let input_dir_canonical = input_dir
         .canonicalize()
         .map_err(|e| format!("[ERROR] Failed to resolve input directory path: {e}"))?;
-    command.env("AVOCADO_STONE_MANIFEST", manifest_path);
+    command.env("AVOCADO_STONE_MANIFEST", manifest_path_canonical);
     command.env("AVOCADO_STONE_BUILD_DIR", build_dir_canonical);
     command.env("AVOCADO_STONE_DATA_DIR", input_dir_canonical);
 
@@ -875,7 +872,7 @@ PRETTY_NAME="Test Linux 1.0.0""#;
 
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
-        let (result, _, _, _) = read_os_release_info(temp_dir.path()).unwrap();
+        let (result, _, _, _) = read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(result, "2.5.1");
     }
 
@@ -890,7 +887,7 @@ PRETTY_NAME='Test Linux 1.0.0'"#;
 
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
-        let (result, _, _, _) = read_os_release_info(temp_dir.path()).unwrap();
+        let (result, _, _, _) = read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(result, "3.0.0-beta");
     }
 
@@ -905,7 +902,7 @@ PRETTY_NAME=Test Linux 1.0.0"#;
 
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
-        let (result, _, _, _) = read_os_release_info(temp_dir.path()).unwrap();
+        let (result, _, _, _) = read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(result, "4.2.1");
     }
 
@@ -913,7 +910,7 @@ PRETTY_NAME=Test Linux 1.0.0"#;
     fn test_read_os_version_missing_file() {
         let temp_dir = TempDir::new().unwrap();
 
-        let result = read_os_release_info(temp_dir.path());
+        let result = read_os_release_info(&[temp_dir.path().to_path_buf()]);
         assert!(result.is_err());
         assert!(
             result
@@ -932,7 +929,7 @@ PRETTY_NAME="Test Linux 1.0.0""#;
 
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
-        let result = read_os_release_info(temp_dir.path());
+        let result = read_os_release_info(&[temp_dir.path().to_path_buf()]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("VERSION_ID field not found"));
     }
@@ -950,7 +947,7 @@ PRETTY_NAME="Test Linux 1.0.0""#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "2.5.1");
         assert_eq!(codename, "jammy");
         assert_eq!(description, "Test Linux 1.0.0");
@@ -970,7 +967,7 @@ PRETTY_NAME="Test Linux 1.0.0""#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "3.0.0");
         assert_eq!(codename, "focal");
         assert_eq!(description, "Test Linux 1.0.0");
@@ -989,7 +986,7 @@ PRETTY_NAME="Test Linux 1.0.0""#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "4.0.0");
         assert_eq!(codename, "");
         assert_eq!(description, "Test Linux 1.0.0");
@@ -1008,7 +1005,7 @@ VERSION_CODENAME=focal"#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "5.0.0");
         assert_eq!(codename, "focal");
         assert_eq!(description, "");
@@ -1028,7 +1025,7 @@ PRETTY_NAME="Ubuntu 22.04.3 LTS""#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "6.0.0");
         assert_eq!(codename, "lunar");
         assert_eq!(description, "Ubuntu 22.04.3 LTS");
@@ -1048,7 +1045,7 @@ PRETTY_NAME='Debian GNU/Linux 12 (bookworm)'"#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "7.0.0");
         assert_eq!(codename, "mantic");
         assert_eq!(description, "Debian GNU/Linux 12 (bookworm)");
@@ -1069,7 +1066,7 @@ VENDOR_NAME="Acme Corporation""#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "8.0.0");
         assert_eq!(codename, "noble");
         assert_eq!(description, "Test Linux 8.0.0");
@@ -1090,7 +1087,7 @@ VENDOR_NAME='Red Hat, Inc.'"#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "9.0.0");
         assert_eq!(codename, "oracular");
         assert_eq!(description, "Test Linux 9.0.0");
@@ -1111,7 +1108,7 @@ VENDOR_NAME=Canonical"#;
         fs::write(temp_dir.path().join("os-release"), os_release_content).unwrap();
 
         let (version, codename, description, author) =
-            read_os_release_info(temp_dir.path()).unwrap();
+            read_os_release_info(&[temp_dir.path().to_path_buf()]).unwrap();
         assert_eq!(version, "10.0.0");
         assert_eq!(codename, "plucky");
         assert_eq!(description, "Test Linux 10.0.0");

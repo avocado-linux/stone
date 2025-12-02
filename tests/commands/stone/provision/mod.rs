@@ -1215,3 +1215,60 @@ echo "SD_SPECIFIC=$SD_SPECIFIC" >> provision_sd_output.txt
     assert!(sd_output.contains("AVOCADO_DEVICE_CERT=device-cert-value"));
     assert!(sd_output.contains("SD_SPECIFIC=sd-value"));
 }
+
+#[test]
+fn test_provision_with_manifest_in_second_directory() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+
+    // Create a minimal manifest in the SECOND directory only
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "simple_image": "simple.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path2.join("manifest.json"), manifest_content).unwrap();
+    fs::write(input_path2.join("simple.img"), "test content").unwrap();
+
+    // Create os-release in the SECOND directory only
+    let os_release_content = r#"NAME="Avocado Linux"
+VERSION="1.0.0"
+ID=avocado
+VERSION_ID="1.0.0"
+PRETTY_NAME="Avocado Linux 1.0.0"
+VERSION_CODENAME=test
+VENDOR_NAME="Test Vendor""#;
+    fs::write(input_path2.join("os-release"), os_release_content).unwrap();
+
+    // Provision should succeed by finding manifest.json and os-release in the second directory
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    // Verify _build directory was created in the directory containing the manifest (input_path2)
+    assert!(input_path2.join("_build").exists());
+}
