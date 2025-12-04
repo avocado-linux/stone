@@ -365,8 +365,10 @@ fn create_fat_manifest_with_resolved_paths(
 
     for entry in files {
         let (input_filename, output_name) = match entry {
-            FileEntry::String(filename) => (filename.as_str(), None),
-            FileEntry::Object { input, output } => (input.as_str(), Some(output.clone())),
+            // For String entries, use the original filename as the output path in the FAT image
+            FileEntry::String(filename) => (filename.as_str(), filename.clone()),
+            // For Object entries, use the explicit output path
+            FileEntry::Object { input, output } => (input.as_str(), output.clone()),
         };
 
         // Resolve the input file across all input directories
@@ -375,8 +377,10 @@ fn create_fat_manifest_with_resolved_paths(
         })?;
 
         fat_files.push(fat::FileEntry {
+            // filename: absolute path where the file is found (for reading)
             filename: Some(resolved_path.to_string_lossy().to_string()),
-            output: output_name,
+            // output: relative path where to place the file in the FAT image
+            output: Some(output_name),
         });
     }
 

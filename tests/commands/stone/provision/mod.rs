@@ -1217,6 +1217,121 @@ echo "SD_SPECIFIC=$SD_SPECIFIC" >> provision_sd_output.txt
 }
 
 #[test]
+fn test_provision_fat_image_files_at_correct_paths() {
+    // This test verifies that files in FAT images are placed at the correct
+    // relative paths, not with absolute path prefixes (regression test for bug
+    // where files were placed at /opt/_avocado/.../file.txt instead of /file.txt)
+    let temp_dir = TempDir::new().unwrap();
+    let input_path1 = temp_dir.path().join("input1");
+    let input_path2 = temp_dir.path().join("input2");
+
+    fs::create_dir_all(&input_path1).unwrap();
+    fs::create_dir_all(&input_path2).unwrap();
+
+    // Create test files in different input directories
+    fs::write(
+        input_path1.join("file_from_input1.txt"),
+        "Content from input1",
+    )
+    .unwrap();
+    fs::write(
+        input_path2.join("file_from_input2.txt"),
+        "Content from input2",
+    )
+    .unwrap();
+
+    // Create os-release in second directory
+    let os_release_content = r#"NAME="Avocado Linux"
+VERSION="1.0.0"
+ID=avocado
+VERSION_ID="1.0.0"
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
+    fs::write(input_path2.join("os-release"), os_release_content).unwrap();
+
+    // Create a manifest with FAT image that references files from both directories
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "fat_image": {
+                        "out": "boot.img",
+                        "size": 16,
+                        "size_unit": "megabytes",
+                        "build_args": {
+                            "type": "fat",
+                            "variant": "FAT32",
+                            "files": [
+                                "file_from_input1.txt",
+                                "file_from_input2.txt"
+                            ]
+                        }
+                    }
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path2.join("manifest.json"), manifest_content).unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path1.to_string_lossy(),
+            "--input-dir",
+            &input_path2.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    // Verify the FAT image was created
+    let fat_image_path = input_path2.join("_build").join("boot.img");
+    assert!(fat_image_path.exists(), "FAT image should be created");
+
+    // List files in the FAT image and verify they are at the correct paths
+    let files_in_fat = stone::fat::list_fat_files(&fat_image_path)
+        .expect("Should be able to list FAT image contents");
+
+    // Files should be at the root of the image, not with absolute path prefixes
+    assert!(
+        files_in_fat.contains(&"file_from_input1.txt".to_string()),
+        "file_from_input1.txt should be at root of FAT image, not with absolute path. Found files: {:?}",
+        files_in_fat
+    );
+    assert!(
+        files_in_fat.contains(&"file_from_input2.txt".to_string()),
+        "file_from_input2.txt should be at root of FAT image, not with absolute path. Found files: {:?}",
+        files_in_fat
+    );
+
+    // Ensure files are at the root (no directory prefix)
+    // Files should be just the filename, not "/some/path/filename.txt"
+    for file in &files_in_fat {
+        assert!(
+            !file.starts_with('/') || file.matches('/').count() == 1,
+            "File '{}' should be at root of FAT image, not in a subdirectory",
+            file
+        );
+        // Make sure there are no deep paths like /opt/_avocado/...
+        assert!(
+            file.matches('/').count() <= 1,
+            "File '{}' has too many path components, should be at root",
+            file
+        );
+    }
+}
+
+#[test]
 fn test_provision_with_manifest_in_second_directory() {
     let temp_dir = TempDir::new().unwrap();
     let input_path1 = temp_dir.path().join("input1");
