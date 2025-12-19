@@ -299,35 +299,59 @@ impl Provision {
     }
 
     pub fn expand_env_vars(&self, envs: &HashMap<String, String>) -> HashMap<String, String> {
+        use crate::log::log_warning;
+
         let mut expanded = HashMap::new();
+        let mut missing_vars = Vec::new();
 
         for (key, value) in envs {
-            let expanded_value = self.expand_single_env_var(value);
+            let (expanded_value, missing) = self.expand_single_env_var(value);
+            missing_vars.extend(missing);
             expanded.insert(key.clone(), expanded_value);
+        }
+
+        if !missing_vars.is_empty() {
+            // Deduplicate missing vars (same var might be referenced multiple times)
+            missing_vars.sort();
+            missing_vars.dedup();
+            log_warning(&format!(
+                "The following environment variables are referenced but not set or empty in the caller's environment: {}",
+                missing_vars.join(", ")
+            ));
         }
 
         expanded
     }
 
-    fn expand_single_env_var(&self, value: &str) -> String {
+    fn expand_single_env_var(&self, value: &str) -> (String, Vec<String>) {
         let mut result = value.to_string();
+        let mut missing_vars = Vec::new();
+        let mut search_start = 0;
 
         // Simple regex-like replacement for ${VAR_NAME} patterns
-        while let Some(start) = result.find("${") {
+        while let Some(relative_start) = result[search_start..].find("${") {
+            let start = search_start + relative_start;
             if let Some(end) = result[start..].find('}') {
                 let var_name = &result[start + 2..start + end];
-                if let Ok(replacement) = std::env::var(var_name) {
-                    result.replace_range(start..start + end + 1, &replacement);
-                } else {
-                    // If env var not found, skip this occurrence to avoid infinite loop
-                    break;
+                match std::env::var(var_name) {
+                    Ok(replacement) if !replacement.is_empty() => {
+                        result.replace_range(start..start + end + 1, &replacement);
+                        // Continue searching from where we left off (replacement might be shorter/longer)
+                        search_start = start + replacement.len();
+                    }
+                    _ => {
+                        // Variable not set or empty - replace with empty string and record warning
+                        missing_vars.push(var_name.to_string());
+                        result.replace_range(start..start + end + 1, "");
+                        // search_start stays at `start` since we removed the ${VAR}
+                    }
                 }
             } else {
                 break;
             }
         }
 
-        result
+        (result, missing_vars)
     }
 }
 
@@ -718,20 +742,72 @@ mod tests {
         );
         test_envs.insert(
             "MIXED_UNDEFINED".to_string(),
-            "prefix_${NONEXISTENT_VAR}_suffix".to_string(),
+            "prefix_${ANOTHER_NONEXISTENT}_suffix".to_string(),
+        );
+
+        // Should replace undefined vars with empty string and warn (warning goes to stdout)
+        let expanded = provision.expand_env_vars(&test_envs);
+
+        assert_eq!(expanded.get("UNDEFINED_VAR"), Some(&"".to_string()));
+        assert_eq!(
+            expanded.get("MIXED_UNDEFINED"),
+            Some(&"prefix__suffix".to_string())
+        );
+    }
+
+    #[test]
+    fn test_provision_env_expansion_multiple_vars_in_one_value() {
+        unsafe {
+            std::env::set_var("FIRST_VAR", "first");
+            std::env::set_var("SECOND_VAR", "second");
+        }
+
+        let provision = Provision {
+            envs: None,
+            profiles: HashMap::new(),
+        };
+
+        let mut test_envs = HashMap::new();
+        test_envs.insert(
+            "MULTI_VAR".to_string(),
+            "${FIRST_VAR}_middle_${SECOND_VAR}".to_string(),
         );
 
         let expanded = provision.expand_env_vars(&test_envs);
 
-        // Should not hang and should leave undefined vars unchanged
         assert_eq!(
-            expanded.get("UNDEFINED_VAR"),
-            Some(&"${NONEXISTENT_VAR}".to_string())
+            expanded.get("MULTI_VAR"),
+            Some(&"first_middle_second".to_string())
         );
-        assert_eq!(
-            expanded.get("MIXED_UNDEFINED"),
-            Some(&"prefix_${NONEXISTENT_VAR}_suffix".to_string())
-        );
+
+        unsafe {
+            std::env::remove_var("FIRST_VAR");
+            std::env::remove_var("SECOND_VAR");
+        }
+    }
+
+    #[test]
+    fn test_provision_env_expansion_empty_var() {
+        unsafe {
+            std::env::set_var("EMPTY_VAR", "");
+        }
+
+        let provision = Provision {
+            envs: None,
+            profiles: HashMap::new(),
+        };
+
+        let mut test_envs = HashMap::new();
+        test_envs.insert("TEST".to_string(), "${EMPTY_VAR}".to_string());
+
+        // Empty vars should also be replaced with empty string and trigger warning
+        let expanded = provision.expand_env_vars(&test_envs);
+
+        assert_eq!(expanded.get("TEST"), Some(&"".to_string()));
+
+        unsafe {
+            std::env::remove_var("EMPTY_VAR");
+        }
     }
 
     #[test]
