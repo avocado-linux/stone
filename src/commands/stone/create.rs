@@ -260,18 +260,19 @@ fn process_image(
         }
     }
 
-    // Only copy the image file if it's a String type (input file)
+    // Only copy the image file/directory if it's a String type (input file/dir)
     // Object types represent generated output files that don't exist yet
     match image {
         crate::manifest::Image::String(filename) => {
-            // This is an input file that should be copied
+            // This is an input file or directory that should be copied
             match find_file_in_dirs(filename, input_dirs) {
                 Some(input_path) => {
                     let output_path = output_dir.join(filename);
-                    copy_file(&input_path, &output_path, verbose)
+                    // Use copy_path to handle both files and directories
+                    copy_path(&input_path, &output_path, verbose)
                 }
                 None => Err(format!(
-                    "Image file '{filename}' for image '{image_name}' not found in any input directory"
+                    "Image file/directory '{filename}' for image '{image_name}' not found in any input directory"
                 )),
             }
         }
@@ -299,12 +300,86 @@ fn process_file_entry(
     match find_file_in_dirs(input_filename, input_dirs) {
         Some(input_path) => {
             let output_path = output_dir.join(input_filename);
-            copy_file(&input_path, &output_path, verbose)
+            // Use copy_path to handle both files and directories
+            copy_path(&input_path, &output_path, verbose)
         }
         None => Err(format!(
-            "File '{input_filename}' not found in any input directory"
+            "File/directory '{input_filename}' not found in any input directory"
         )),
     }
+}
+
+/// Copy a file or directory recursively from input to output path
+fn copy_path(input_path: &Path, output_path: &Path, verbose: bool) -> Result<(), String> {
+    // Check if input exists
+    if !input_path.exists() {
+        return Err(format!("Input path '{}' not found.", input_path.display()));
+    }
+
+    if input_path.is_dir() {
+        // Recursively copy directory contents
+        copy_directory(input_path, output_path, verbose)
+    } else {
+        // Copy single file
+        copy_file(input_path, output_path, verbose)
+    }
+}
+
+/// Recursively copy a directory and all its contents
+fn copy_directory(input_dir: &Path, output_dir: &Path, verbose: bool) -> Result<(), String> {
+    // Create output directory
+    if let Err(e) = fs::create_dir_all(output_dir) {
+        return Err(format!(
+            "Failed to create output directory '{}': {}",
+            output_dir.display(),
+            e
+        ));
+    }
+
+    if verbose {
+        log_debug(&format!(
+            "Copying directory:\n  {}\n  {}",
+            input_dir.display(),
+            output_dir.display()
+        ));
+    }
+
+    // Read directory entries
+    let entries = fs::read_dir(input_dir)
+        .map_err(|e| format!("Failed to read directory '{}': {}", input_dir.display(), e))?;
+
+    let mut file_count = 0;
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            format!(
+                "Failed to read directory entry in '{}': {}",
+                input_dir.display(),
+                e
+            )
+        })?;
+
+        let input_child = entry.path();
+        let output_child = output_dir.join(entry.file_name());
+
+        if input_child.is_dir() {
+            // Recursively copy subdirectory
+            copy_directory(&input_child, &output_child, verbose)?;
+        } else {
+            // Copy file
+            copy_file(&input_child, &output_child, verbose)?;
+            file_count += 1;
+        }
+    }
+
+    if verbose {
+        log_debug(&format!(
+            "Copied {} files from directory '{}'",
+            file_count,
+            input_dir.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn copy_file(input_path: &Path, output_path: &Path, verbose: bool) -> Result<(), String> {
