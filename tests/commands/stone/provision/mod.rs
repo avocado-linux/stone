@@ -1387,3 +1387,97 @@ VENDOR_NAME="Test Vendor""#;
     // Verify _build directory was created in the directory containing the manifest (input_path2)
     assert!(input_path2.join("_build").exists());
 }
+
+#[test]
+fn test_provision_cleans_build_dir_between_runs() {
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // Create test file for FAT image
+    fs::write(input_path.join("test_file.txt"), "original content").unwrap();
+
+    // Create os-release file
+    let os_release_content = r#"NAME="Avocado Linux"
+VERSION="1.0.0"
+ID=avocado
+VERSION_ID="1.0.0"
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // Create a manifest with a FAT image
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "test_device": {
+                "out": "test.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "fat_image": {
+                        "out": "boot.img",
+                        "size": 16,
+                        "size_unit": "megabytes",
+                        "build_args": {
+                            "type": "fat",
+                            "variant": "FAT32",
+                            "files": [
+                                "test_file.txt"
+                            ]
+                        }
+                    }
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+
+    // First provision run
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args(["provision", "--input-dir", &input_path.to_string_lossy()])
+        .assert()
+        .success();
+
+    let build_dir = input_path.join("_build");
+    assert!(
+        build_dir.exists(),
+        "_build directory should exist after provision"
+    );
+    assert!(
+        build_dir.join("boot.img").exists(),
+        "boot.img should be built"
+    );
+
+    // Place a stale artifact in _build that should not survive the next run
+    fs::write(build_dir.join("stale_artifact.img"), "stale data").unwrap();
+    assert!(build_dir.join("stale_artifact.img").exists());
+
+    // Second provision run should clean _build and rebuild fresh
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args(["provision", "--input-dir", &input_path.to_string_lossy()])
+        .assert()
+        .success();
+
+    // _build should exist with the rebuilt image
+    assert!(
+        build_dir.exists(),
+        "_build directory should exist after second provision"
+    );
+    assert!(
+        build_dir.join("boot.img").exists(),
+        "boot.img should be rebuilt"
+    );
+
+    // Stale artifact should be gone
+    assert!(
+        !build_dir.join("stale_artifact.img").exists(),
+        "Stale artifacts from previous provision runs should be cleaned"
+    );
+}

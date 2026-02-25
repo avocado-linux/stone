@@ -59,8 +59,17 @@ pub fn provision_command(input_dirs: &[PathBuf], verbose: bool) -> Result<(), St
         log_info(&format!("Found manifest in '{}'.", input_dir.display()));
     }
 
-    // Create _build directory for our work
+    // Clean and recreate _build directory to ensure fresh builds
     let build_dir = input_dir.join("_build");
+    if build_dir.exists()
+        && let Err(e) = fs::remove_dir_all(&build_dir)
+    {
+        return Err(format!(
+            "Failed to clean build directory '{}': {}",
+            build_dir.display(),
+            e
+        ));
+    }
     if let Err(e) = fs::create_dir_all(&build_dir) {
         return Err(format!(
             "Failed to create build directory '{}': {}",
