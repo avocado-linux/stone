@@ -165,7 +165,7 @@ pub fn bundle_command(
     let artifacts = collect_artifacts(&manifest, &built_images, input_dirs, &images_dir, verbose)?;
 
     // Step 4: Parse os-release for OS build ID
-    let os_build_id = parse_os_release_field(os_release_path, "BUILD_ID")?;
+    let os_build_id = parse_os_release_field(os_release_path, "AVOCADO_OS_BUILD_ID")?;
 
     // Step 5: Generate bundle.json
     let bundle_json = generate_bundle_json(&manifest, &artifacts, &os_build_id)?;
@@ -635,7 +635,7 @@ fn generate_bundle_json(
     if !os_build_id.is_empty() {
         bundle["verify"] = serde_json::json!({
             "type": "os-release",
-            "field": "BUILD_ID",
+            "field": "AVOCADO_OS_BUILD_ID",
             "expected": os_build_id,
         });
     }
