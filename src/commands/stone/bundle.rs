@@ -24,6 +24,10 @@ pub struct BundleArgs {
     #[arg(long = "os-release", value_name = "PATH")]
     pub os_release: PathBuf,
 
+    /// Path to the initramfs OS release file (optional, for initramfs build ID)
+    #[arg(long = "os-release-initrd", value_name = "PATH")]
+    pub os_release_initrd: Option<PathBuf>,
+
     /// Path to the input directory (can be specified multiple times for search priority)
     #[arg(
         short = 'i',
@@ -56,6 +60,7 @@ impl BundleArgs {
         bundle_command(
             &self.manifest,
             &self.os_release,
+            self.os_release_initrd.as_deref(),
             &self.input_dirs,
             &self.output,
             self.build_dir.as_deref(),
@@ -96,6 +101,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 pub fn bundle_command(
     manifest_path: &Path,
     os_release_path: &Path,
+    os_release_initrd_path: Option<&Path>,
     input_dirs: &[PathBuf],
     output_path: &Path,
     build_dir_override: Option<&Path>,
@@ -153,6 +159,7 @@ pub fn bundle_command(
         &manifest,
         manifest_path,
         os_release_path,
+        os_release_initrd_path,
         input_dirs,
         build_dir,
         verbose,
@@ -167,8 +174,16 @@ pub fn bundle_command(
     // Step 4: Parse os-release for OS build ID
     let os_build_id = parse_os_release_field(os_release_path, "AVOCADO_OS_BUILD_ID")?;
 
+    // Step 4b: Parse initramfs os-release for initramfs build ID (if provided)
+    let initramfs_build_id = if let Some(initrd_path) = os_release_initrd_path {
+        let id = parse_os_release_field(initrd_path, "AVOCADO_OS_BUILD_ID")?;
+        if id.is_empty() { None } else { Some(id) }
+    } else {
+        None
+    };
+
     // Step 5: Generate bundle.json
-    let bundle_json = generate_bundle_json(&manifest, &artifacts, &os_build_id)?;
+    let bundle_json = generate_bundle_json(&manifest, &artifacts, &os_build_id, initramfs_build_id.as_deref())?;
     let bundle_json_path = build_dir.join("bundle.json");
     let bundle_json_str = serde_json::to_string_pretty(&bundle_json)
         .map_err(|e| format!("Failed to serialize bundle.json: {e}"))?;
@@ -203,6 +218,7 @@ fn copy_manifest_inputs(
     manifest: &Manifest,
     manifest_path: &Path,
     os_release_path: &Path,
+    os_release_initrd_path: Option<&Path>,
     input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
@@ -214,6 +230,12 @@ fn copy_manifest_inputs(
     // Copy os-release
     let os_release_dest = build_dir.join("os-release");
     copy_file(os_release_path, &os_release_dest, verbose)?;
+
+    // Copy os-release-initrd (if provided)
+    if let Some(initrd_path) = os_release_initrd_path {
+        let initrd_dest = build_dir.join("os-release-initrd");
+        copy_file(initrd_path, &initrd_dest, verbose)?;
+    }
 
     // Copy fwup templates and provision scripts for provision compatibility
     for device in manifest.storage_devices.values() {
@@ -513,6 +535,7 @@ fn generate_bundle_json(
     manifest: &Manifest,
     artifacts: &[BundleArtifact],
     os_build_id: &str,
+    initramfs_build_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let update = manifest.update.as_ref();
 
@@ -565,6 +588,10 @@ fn generate_bundle_json(
         "architecture": manifest.runtime.architecture,
         "os_build_id": os_build_id,
     });
+
+    if let Some(initramfs_id) = initramfs_build_id {
+        bundle["initramfs_build_id"] = serde_json::json!(initramfs_id);
+    }
 
     // Add update section if manifest has one
     if let Some(update) = update {
@@ -637,6 +664,16 @@ fn generate_bundle_json(
             "type": "os-release",
             "field": "AVOCADO_OS_BUILD_ID",
             "expected": os_build_id,
+        });
+    }
+
+    // Add initramfs verify section
+    if let Some(initramfs_id) = initramfs_build_id {
+        bundle["verify_initramfs"] = serde_json::json!({
+            "type": "os-release",
+            "field": "AVOCADO_OS_BUILD_ID",
+            "path": "/etc/os-release-initrd",
+            "expected": initramfs_id,
         });
     }
 
