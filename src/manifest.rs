@@ -63,6 +63,43 @@ pub struct Manifest {
     pub storage_devices: std::collections::HashMap<String, StorageDevice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provision: Option<Provision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<Update>,
+}
+
+// --- Update section: declares how OS artifacts map to A/B slots for OTA ---
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Update {
+    pub slot_detection: SlotDetection,
+    pub os_artifacts: HashMap<String, OsArtifactRef>,
+    pub activate: SlotAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback: Option<SlotAction>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "type")]
+pub enum SlotDetection {
+    #[serde(rename = "uboot-env")]
+    UbootEnv { var: String },
+    #[serde(rename = "command")]
+    Command { command: Vec<String> },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OsArtifactRef {
+    pub image_key: String,
+    pub slot_partitions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "type")]
+pub enum SlotAction {
+    #[serde(rename = "uboot-env")]
+    UbootEnv { set: HashMap<String, String> },
+    #[serde(rename = "command")]
+    Command { command: Vec<String> },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -73,6 +110,8 @@ pub struct Runtime {
     pub provision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provision_default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_strategy: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -506,6 +545,7 @@ mod tests {
             architecture: "x86_64".to_string(),
             provision: Some("provision.sh".to_string()),
             provision_default: None,
+            update_strategy: None,
         };
 
         let serialized = serde_json::to_value(&runtime).unwrap();
@@ -527,6 +567,7 @@ mod tests {
             architecture: "x86_64".to_string(),
             provision: None,
             provision_default: None,
+            update_strategy: None,
         };
 
         let serialized = serde_json::to_value(&runtime).unwrap();
