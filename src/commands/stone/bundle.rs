@@ -239,6 +239,14 @@ fn copy_manifest_inputs(
             {
                 copy_file(&src, &build_dir.join(template), verbose)?;
             }
+            // Copy FAT source files (e.g., initramfs, bzImage) so provision can rebuild FAT images
+            for file_entry in image.files() {
+                let input_filename = file_entry.input_filename();
+                if let Some(src) = find_file_in_dirs(input_filename, input_dirs) {
+                    let dest = build_dir.join(input_filename);
+                    copy_path(&src, &dest, verbose)?;
+                }
+            }
         }
     }
 
