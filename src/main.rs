@@ -30,6 +30,7 @@ fn run() -> Result<(), String> {
         Commands::Validate(args) => args.execute(),
         Commands::DescribeManifest(args) => args.execute(),
         Commands::Create(args) => args.execute(),
+        Commands::Bundle(args) => args.execute(),
         Commands::Provision(args) => args.execute(),
     }
 }

@@ -1,10 +1,12 @@
 use clap::Subcommand;
 
+pub mod bundle;
 pub mod create;
 pub mod describe_manifest;
 pub mod provision;
 pub mod validate;
 
+use bundle::BundleArgs;
 use create::CreateArgs;
 use describe_manifest::DescribeManifestArgs;
 use provision::ProvisionArgs;
@@ -21,6 +23,9 @@ pub enum Commands {
 
     /// Create the artifacts specified in the manifest.
     Create(CreateArgs),
+
+    /// Build an OS bundle (.aos) containing all boot/OS artifacts for OTA and provisioning.
+    Bundle(BundleArgs),
 
     /// Provision by actually building the artifacts specified in the manifest.
     Provision(ProvisionArgs),
