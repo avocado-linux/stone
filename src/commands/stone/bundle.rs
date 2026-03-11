@@ -407,22 +407,17 @@ fn collect_artifacts(
             let image = find_image_in_manifest(manifest, image_key)?;
             let filename = image.out();
 
-            // Check if it's already in images_dir
-            let in_images = images_dir.join(filename);
-            if in_images.exists() {
-                in_images
-            } else {
-                // Find in input dirs and copy to images/
-                let src = find_file_in_dirs(filename, input_dirs).ok_or_else(|| {
-                    format!(
-                        "Image file '{}' for artifact '{}' not found in any input directory",
-                        filename, artifact_name
-                    )
-                })?;
-                let dest = images_dir.join(filename);
-                copy_file(&src, &dest, verbose)?;
-                dest
-            }
+            // Always copy fresh from input_dirs to ensure we don't reuse
+            // stale cached artifacts from a previous build
+            let dest = images_dir.join(filename);
+            let src = find_file_in_dirs(filename, input_dirs).ok_or_else(|| {
+                format!(
+                    "Image file '{}' for artifact '{}' not found in any input directory",
+                    filename, artifact_name
+                )
+            })?;
+            copy_file(&src, &dest, verbose)?;
+            dest
         };
 
         let filename = image_path
