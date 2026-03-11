@@ -183,7 +183,12 @@ pub fn bundle_command(
     };
 
     // Step 5: Generate bundle.json
-    let bundle_json = generate_bundle_json(&manifest, &artifacts, &os_build_id, initramfs_build_id.as_deref())?;
+    let bundle_json = generate_bundle_json(
+        &manifest,
+        &artifacts,
+        &os_build_id,
+        initramfs_build_id.as_deref(),
+    )?;
     let bundle_json_path = build_dir.join("bundle.json");
     let bundle_json_str = serde_json::to_string_pretty(&bundle_json)
         .map_err(|e| format!("Failed to serialize bundle.json: {e}"))?;
@@ -606,12 +611,12 @@ fn generate_bundle_json(
             "slot_detection": serde_json::to_value(&update.slot_detection)
                 .map_err(|e| format!("Failed to serialize slot_detection: {e}"))?,
             "artifacts": bundle_artifacts,
-            "activate": serde_json::to_value(&update.activate)
+            "activate": serde_json::to_value(update.activate.as_vec())
                 .map_err(|e| format!("Failed to serialize activate: {e}"))?,
         });
 
         if let Some(rollback) = &update.rollback {
-            update_section["rollback"] = serde_json::to_value(rollback)
+            update_section["rollback"] = serde_json::to_value(rollback.as_vec())
                 .map_err(|e| format!("Failed to serialize rollback: {e}"))?;
         }
 

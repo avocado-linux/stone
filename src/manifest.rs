@@ -73,9 +73,9 @@ pub struct Manifest {
 pub struct Update {
     pub slot_detection: SlotDetection,
     pub os_artifacts: HashMap<String, OsArtifactRef>,
-    pub activate: SlotAction,
+    pub activate: SlotActions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rollback: Option<SlotAction>,
+    pub rollback: Option<SlotActions>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -100,6 +100,27 @@ pub enum SlotAction {
     UbootEnv { set: HashMap<String, String> },
     #[serde(rename = "command")]
     Command { command: Vec<String> },
+    #[serde(rename = "mbr-switch")]
+    MbrSwitch {
+        devpath: String,
+        slot_layouts: HashMap<String, Vec<String>>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum SlotActions {
+    Single(SlotAction),
+    Multiple(Vec<SlotAction>),
+}
+
+impl SlotActions {
+    pub fn as_vec(&self) -> Vec<&SlotAction> {
+        match self {
+            SlotActions::Single(a) => vec![a],
+            SlotActions::Multiple(v) => v.iter().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
