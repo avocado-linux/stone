@@ -624,8 +624,10 @@ fn generate_bundle_json(
     }
 
     // Add layout section from storage_devices partitions
+    // Compute sequential offsets for partitions that don't have explicit ones
     for device in manifest.storage_devices.values() {
         if !device.partitions.is_empty() {
+            let mut cursor_bytes: u64 = 0;
             let partitions: Vec<serde_json::Value> = device
                 .partitions
                 .iter()
@@ -636,12 +638,21 @@ fn generate_bundle_json(
                     }
                     part["size"] = serde_json::json!(p.size);
                     part["size_unit"] = serde_json::json!(p.size_unit);
-                    if let Some(offset) = p.offset {
-                        part["offset"] = serde_json::json!(offset);
-                    }
-                    if let Some(offset_unit) = &p.offset_unit {
-                        part["offset_unit"] = serde_json::json!(offset_unit);
-                    }
+
+                    // Use explicit offset if provided, otherwise use sequential cursor
+                    let offset_bytes = if let Some(offset) = p.offset {
+                        let unit = p.offset_unit.as_deref();
+                        to_bytes(offset as u64, unit)
+                    } else {
+                        cursor_bytes
+                    };
+                    part["offset"] = serde_json::json!(offset_bytes);
+                    part["offset_unit"] = serde_json::json!("bytes");
+
+                    // Advance cursor past this partition
+                    let size_bytes = to_bytes(p.size as u64, Some(&p.size_unit));
+                    cursor_bytes = offset_bytes + size_bytes;
+
                     if let Some(expand) = &p.expand {
                         part["expand"] = serde_json::json!(expand);
                     }
@@ -683,6 +694,22 @@ fn generate_bundle_json(
     }
 
     Ok(bundle)
+}
+
+/// Convert a size value to bytes based on its unit.
+fn to_bytes(value: u64, unit: Option<&str>) -> u64 {
+    match unit {
+        Some("tebibytes") => value * 1024 * 1024 * 1024 * 1024,
+        Some("gibibytes") => value * 1024 * 1024 * 1024,
+        Some("mebibytes") => value * 1024 * 1024,
+        Some("kibibytes") => value * 1024,
+        Some("terabytes") => value * 1_000_000_000_000,
+        Some("gigabytes") => value * 1_000_000_000,
+        Some("megabytes") => value * 1_000_000,
+        Some("kilobytes") => value * 1_000,
+        Some("bytes") | None => value,
+        _ => value,
+    }
 }
 
 /// Package everything into a .aos tar.zst archive
