@@ -216,6 +216,8 @@ struct BundleArtifact {
     archive_path: String,
     /// SHA256 hash
     sha256: String,
+    /// File size in bytes
+    size: u64,
 }
 
 /// Copy manifest inputs to the build directory (mirrors stone create behavior)
@@ -430,10 +432,13 @@ fn collect_artifacts(
             .to_string();
         let archive_path = format!("images/{filename}");
         let sha256 = sha256_file(&image_path)?;
+        let size = std::fs::metadata(&image_path)
+            .map(|m| m.len())
+            .map_err(|e| format!("Failed to get size of '{}': {e}", image_path.display()))?;
 
         if verbose {
             log_debug(&format!(
-                "Artifact '{artifact_name}': {archive_path} (sha256: {sha256})"
+                "Artifact '{artifact_name}': {archive_path} (sha256: {sha256}, size: {size})"
             ));
         }
 
@@ -442,6 +447,7 @@ fn collect_artifacts(
             path: image_path,
             archive_path,
             sha256,
+            size,
         });
     }
 
@@ -489,12 +495,16 @@ fn collect_all_images_as_artifacts(
                 .to_string();
             let archive_path = format!("images/{filename}");
             let sha256 = sha256_file(&image_path)?;
+            let size = std::fs::metadata(&image_path)
+                .map(|m| m.len())
+                .map_err(|e| format!("Failed to get size of '{}': {e}", image_path.display()))?;
 
             artifacts.push(BundleArtifact {
                 name: image_name.clone(),
                 path: image_path,
                 archive_path,
                 sha256,
+                size,
             });
         }
     }
@@ -551,6 +561,7 @@ fn generate_bundle_json(
             "name": artifact.name,
             "file": artifact.archive_path,
             "sha256": artifact.sha256,
+            "size": artifact.size,
         });
 
         // Add slot_targets from the manifest's os_artifacts
