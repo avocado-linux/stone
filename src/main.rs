@@ -11,6 +11,7 @@ mod manifest;
 #[derive(Parser, Debug)]
 #[command(name = "stone")]
 #[command(about = "A CLI for managing Avocado stones.")]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
