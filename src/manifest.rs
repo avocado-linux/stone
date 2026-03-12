@@ -85,6 +85,11 @@ pub enum SlotDetection {
     UbootEnv { var: String },
     #[serde(rename = "command")]
     Command { command: Vec<String> },
+    #[serde(rename = "sdboot-efi")]
+    SdbootEfi {
+        /// Map from GPT partition UUID -> slot name (e.g. {"<uuid>": "a", "<uuid>": "b"})
+        partitions: HashMap<String, String>,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -104,6 +109,11 @@ pub enum SlotAction {
     MbrSwitch {
         devpath: String,
         slot_layouts: HashMap<String, Vec<String>>,
+    },
+    #[serde(rename = "efibootmgr")]
+    Efibootmgr {
+        /// Map from slot name -> EFI boot entry label (e.g. {"a": "boot-a", "b": "boot-b"})
+        slot_entries: HashMap<String, String>,
     },
 }
 
@@ -277,6 +287,10 @@ pub struct Partition {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partition_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partition_uuid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
