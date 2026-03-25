@@ -69,12 +69,26 @@ pub fn validate_command(manifest_path: &Path, input_dirs: &[PathBuf]) -> Result<
         ));
     }
 
+    // Known values for the provision profile `requires` field
+    const KNOWN_REQUIRES: &[&str] = &["usb"];
+
     // Check provision profiles and their scripts
     if let Some(provision) = &manifest.provision {
         for (profile_name, profile) in &provision.profiles {
             if find_file_in_dirs(&profile.script, input_dirs).is_none() {
                 missing_provision_files
                     .push((format!("Profile '{profile_name}'"), profile.script.clone()));
+            }
+            for req in &profile.requires {
+                if !KNOWN_REQUIRES.contains(&req.as_str()) {
+                    missing_provision_files.push((
+                        format!("Profile '{profile_name}'"),
+                        format!(
+                            "Unknown requires value '{req}'. Known values: {}",
+                            KNOWN_REQUIRES.join(", ")
+                        ),
+                    ));
+                }
             }
         }
 

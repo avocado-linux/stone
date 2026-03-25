@@ -157,6 +157,11 @@ pub struct ProvisionProfile {
     pub script: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub envs: Option<Vec<ProvisionEnv>>,
+    /// Declares capabilities this profile requires from the host environment.
+    /// Known values: "usb" (USB device passthrough for direct device flashing).
+    /// Scripts should check AVOCADO_USB_PASSTHROUGH env var to adapt at runtime.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
