@@ -20,11 +20,18 @@ pub enum BuildArgs {
         variant: FatVariant,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files: Vec<FileEntry>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     #[serde(rename = "fwup")]
     Fwup {
         template: String, // Path to template file
     },
+    /// Simple zip archive of images — no fwup template processing.
+    /// Used for targets where provisioning scripts handle disk image
+    /// creation directly (e.g., RPi tryboot with sfdisk + dd).
+    #[serde(rename = "archive")]
+    Archive,
 }
 
 impl BuildArgs {
@@ -32,6 +39,7 @@ impl BuildArgs {
         match self {
             BuildArgs::Fat { .. } => "fat",
             BuildArgs::Fwup { .. } => "fwup",
+            BuildArgs::Archive => "archive",
         }
     }
 
@@ -53,6 +61,14 @@ impl BuildArgs {
     pub fn fat_variant(&self) -> Option<&FatVariant> {
         match self {
             BuildArgs::Fat { variant, .. } => Some(variant),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn fat_label(&self) -> Option<&str> {
+        match self {
+            BuildArgs::Fat { label, .. } => label.as_deref(),
             _ => None,
         }
     }
@@ -115,6 +131,14 @@ pub enum SlotAction {
     Efibootmgr {
         /// Map from slot name -> EFI boot entry label (e.g. {"a": "boot-a", "b": "boot-b"})
         slot_entries: HashMap<String, String>,
+    },
+    /// RPi native tryboot mechanism: writes tryboot.txt to the active boot partition
+    /// to redirect the EEPROM to the inactive slot on next tryboot reboot.
+    #[serde(rename = "rpi-tryboot")]
+    RpiTryboot {
+        devpath: String,
+        /// Map from slot name -> MBR partition number (1-indexed, e.g. {"a": 1, "b": 2})
+        boot_partitions: HashMap<String, u32>,
     },
 }
 
@@ -390,10 +414,8 @@ impl Manifest {
             deep_merge_json(&mut merged, overlay_value);
         }
 
-        let merged_json =
-            serde_json::to_string_pretty(&merged).map_err(|e| {
-                format!("[ERROR] Failed to serialize merged manifest: {}", e)
-            })?;
+        let merged_json = serde_json::to_string_pretty(&merged)
+            .map_err(|e| format!("[ERROR] Failed to serialize merged manifest: {}", e))?;
 
         let manifest: Self = serde_json::from_value(merged).map_err(|e| {
             format!(
@@ -562,6 +584,7 @@ mod tests {
         let fat_args = BuildArgs::Fat {
             variant: FatVariant::Fat32,
             files: vec![],
+            label: None,
         };
 
         let serialized = serde_json::to_value(&fat_args).unwrap();
@@ -587,6 +610,7 @@ mod tests {
         let fat_args = BuildArgs::Fat {
             variant: FatVariant::Fat16,
             files: vec![],
+            label: None,
         };
         assert_eq!(fat_args.build_type(), "fat");
 
@@ -594,6 +618,9 @@ mod tests {
             template: "config.conf".to_string(),
         };
         assert_eq!(fwup_args.build_type(), "fwup");
+
+        let archive_args = BuildArgs::Archive;
+        assert_eq!(archive_args.build_type(), "archive");
     }
 
     #[test]
@@ -603,6 +630,7 @@ mod tests {
             build_args: Some(BuildArgs::Fat {
                 variant: FatVariant::Fat32,
                 files: vec![],
+                label: None,
             }),
             size: 100,
             size_unit: "megabytes".to_string(),
@@ -689,12 +717,67 @@ mod tests {
                     output: "dest.bin".to_string(),
                 },
             ],
+            label: None,
         };
 
         assert_eq!(fat_args.build_type(), "fat");
         assert_eq!(fat_args.fat_files().len(), 2);
         assert_eq!(fat_args.fat_files()[0].input_filename(), "file1.txt");
         assert_eq!(fat_args.fat_files()[1].input_filename(), "source.bin");
+    }
+
+    #[test]
+    fn test_fat_build_args_with_label() {
+        let json_str = r#"{"type":"fat","variant":"FAT12","files":[],"label":"UBOOT-ENV"}"#;
+        let deserialized: BuildArgs = serde_json::from_str(json_str).unwrap();
+        match &deserialized {
+            BuildArgs::Fat { label, .. } => {
+                assert_eq!(label.as_deref(), Some("UBOOT-ENV"));
+            }
+            _ => panic!("Expected Fat variant"),
+        }
+        assert_eq!(deserialized.fat_label(), Some("UBOOT-ENV"));
+
+        // Without label
+        let json_str = r#"{"type":"fat","variant":"FAT32","files":[]}"#;
+        let deserialized: BuildArgs = serde_json::from_str(json_str).unwrap();
+        assert_eq!(deserialized.fat_label(), None);
+    }
+
+    #[test]
+    fn test_archive_build_args() {
+        let json_str = r#"{"type":"archive"}"#;
+        let deserialized: BuildArgs = serde_json::from_str(json_str).unwrap();
+        assert_eq!(deserialized.build_type(), "archive");
+
+        let serialized = serde_json::to_value(&deserialized).unwrap();
+        assert_eq!(serialized["type"], "archive");
+    }
+
+    #[test]
+    fn test_rpi_tryboot_slot_action() {
+        let json_str = r#"{
+            "type": "rpi-tryboot",
+            "devpath": "/dev/mmcblk0",
+            "boot_partitions": { "a": 1, "b": 2 }
+        }"#;
+        let action: SlotAction = serde_json::from_str(json_str).unwrap();
+        match &action {
+            SlotAction::RpiTryboot {
+                devpath,
+                boot_partitions,
+            } => {
+                assert_eq!(devpath, "/dev/mmcblk0");
+                assert_eq!(boot_partitions.get("a"), Some(&1));
+                assert_eq!(boot_partitions.get("b"), Some(&2));
+            }
+            _ => panic!("Expected RpiTryboot variant"),
+        }
+
+        // Roundtrip
+        let serialized = serde_json::to_value(&action).unwrap();
+        assert_eq!(serialized["type"], "rpi-tryboot");
+        assert_eq!(serialized["devpath"], "/dev/mmcblk0");
     }
 
     #[test]
@@ -1079,8 +1162,14 @@ mod tests {
             }
         });
         deep_merge_json(&mut base, overlay);
-        assert_eq!(base["storage_devices"]["rootdisk"]["images"]["boot"]["out"], "boot.img");
-        assert_eq!(base["storage_devices"]["rootdisk"]["images"]["rootfs"], "rootfs.img");
+        assert_eq!(
+            base["storage_devices"]["rootdisk"]["images"]["boot"]["out"],
+            "boot.img"
+        );
+        assert_eq!(
+            base["storage_devices"]["rootdisk"]["images"]["rootfs"],
+            "rootfs.img"
+        );
     }
 
     #[test]
@@ -1201,7 +1290,10 @@ mod tests {
             }
         });
         deep_merge_json(&mut base, overlay);
-        assert_eq!(base["provision"]["profiles"]["img"]["script"], "provision.sh");
+        assert_eq!(
+            base["provision"]["profiles"]["img"]["script"],
+            "provision.sh"
+        );
         assert_eq!(base["runtime"]["platform"], "test");
     }
 
@@ -1239,8 +1331,7 @@ mod tests {
         std::fs::write(&base_path, base_json).unwrap();
         std::fs::write(&overlay_path, overlay_json).unwrap();
 
-        let manifest =
-            Manifest::from_file_with_overlays(&base_path, &[overlay_path]).unwrap();
+        let manifest = Manifest::from_file_with_overlays(&base_path, &[overlay_path]).unwrap();
 
         assert_eq!(manifest.runtime.platform, "overlay-platform");
         assert_eq!(manifest.runtime.architecture, "arm64");
@@ -1266,8 +1357,9 @@ mod tests {
         .unwrap();
         std::fs::write(&overlay_path, "not valid json{{{").unwrap();
 
-        let err = Manifest::from_file_with_overlays(&base_path, &[overlay_path.clone()])
-            .unwrap_err();
+        let err =
+            Manifest::from_file_with_overlays(&base_path, std::slice::from_ref(&overlay_path))
+                .unwrap_err();
         assert!(err.contains("Failed to parse overlay JSON"));
         assert!(err.contains("bad.json"));
     }

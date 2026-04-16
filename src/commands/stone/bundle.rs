@@ -244,7 +244,11 @@ fn copy_manifest_inputs(
     let manifest_dest = build_dir.join("manifest.json");
     if let Some(json_str) = merged_manifest_json {
         fs::write(&manifest_dest, json_str).map_err(|e| {
-            format!("Failed to write merged manifest to '{}': {}", manifest_dest.display(), e)
+            format!(
+                "Failed to write merged manifest to '{}': {}",
+                manifest_dest.display(),
+                e
+            )
         })?;
     } else {
         copy_file(manifest_path, &manifest_dest, verbose)?;
@@ -329,7 +333,12 @@ fn build_all_images(
             match image {
                 Image::Object {
                     out,
-                    build_args: Some(BuildArgs::Fat { variant, files }),
+                    build_args:
+                        Some(BuildArgs::Fat {
+                            variant,
+                            files,
+                            label,
+                        }),
                     size,
                     size_unit,
                     ..
@@ -356,13 +365,17 @@ fn build_all_images(
                     let output_in_build = build_dir.join(out);
                     let base_path = PathBuf::from(".");
 
-                    let options = fat::FatImageOptions::new()
+                    let mut options = fat::FatImageOptions::new()
                         .with_manifest_path(&temp_manifest_path)
                         .with_base_path(&base_path)
                         .with_output_path(&output_in_images)
                         .with_size_mebibytes(size_mb)
                         .with_fat_type(fat_type)
                         .with_verbose(verbose);
+
+                    if let Some(lbl) = label {
+                        options = options.with_label(lbl);
+                    }
 
                     fat::create_fat_image(&options)?;
                     let _ = fs::remove_file(&temp_manifest_path);

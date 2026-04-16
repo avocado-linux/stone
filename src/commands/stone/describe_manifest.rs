@@ -144,14 +144,24 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
                     output.push_str("    Build Args:\n");
                     output.push_str(&format!("      type: {}\n", build_args.build_type()));
                     match build_args {
-                        crate::manifest::BuildArgs::Fat { variant, files } => {
+                        crate::manifest::BuildArgs::Fat {
+                            variant,
+                            files,
+                            label,
+                        } => {
                             output.push_str(&format!("      variant: {variant:?}\n"));
+                            if let Some(lbl) = label {
+                                output.push_str(&format!("      label: \"{lbl}\"\n"));
+                            }
                             if !files.is_empty() {
                                 output.push_str(&format!("      files: {} file(s)\n", files.len()));
                             }
                         }
                         crate::manifest::BuildArgs::Fwup { template } => {
                             output.push_str(&format!("      template: \"{template}\"\n"));
+                        }
+                        crate::manifest::BuildArgs::Archive => {
+                            output.push_str("      (archive — images only)\n");
                         }
                     }
                 }
@@ -218,14 +228,24 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
             output.push_str("\nStorage Device Build Args:\n");
             output.push_str(&format!("  type: {}\n", build_args.build_type()));
             match build_args {
-                crate::manifest::BuildArgs::Fat { variant, files } => {
+                crate::manifest::BuildArgs::Fat {
+                    variant,
+                    files,
+                    label,
+                } => {
                     output.push_str(&format!("  variant: {variant:?}\n"));
+                    if let Some(lbl) = label {
+                        output.push_str(&format!("  label: \"{lbl}\"\n"));
+                    }
                     if !files.is_empty() {
                         output.push_str(&format!("  files: {} file(s)\n", files.len()));
                     }
                 }
                 crate::manifest::BuildArgs::Fwup { template } => {
                     output.push_str(&format!("  template: \"{template}\"\n"));
+                }
+                crate::manifest::BuildArgs::Archive => {
+                    output.push_str("  (archive — images only)\n");
                 }
             }
         }

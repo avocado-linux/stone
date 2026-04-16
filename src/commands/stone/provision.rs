@@ -152,6 +152,13 @@ fn build_storage_device(
                 verbose,
             )?;
         }
+        BuildArgs::Archive => {
+            log_info(&format!(
+                "Building storage device '{device_name}' as archive (images only, no fwup)."
+            ));
+
+            build_archive(device_name, device, build_dir, verbose)?;
+        }
         BuildArgs::Fat { .. } => {
             return Err("FAT build args not supported for storage devices".to_string());
         }
@@ -189,11 +196,16 @@ fn build_image(
             size_unit,
             ..
         } => match build_args {
-            BuildArgs::Fat { variant, files } => build_fat_image(FatImageParams {
+            BuildArgs::Fat {
+                variant,
+                files,
+                label,
+            } => build_fat_image(FatImageParams {
                 image_name,
                 out,
                 variant,
                 files,
+                label: label.as_deref(),
                 size,
                 size_unit,
                 input_dirs,
@@ -202,6 +214,12 @@ fn build_image(
             }),
             BuildArgs::Fwup { template } => {
                 build_fwup_image(image_name, image, template, input_dirs, build_dir, verbose)
+            }
+            BuildArgs::Archive => {
+                // Archive build type is for storage devices, not individual images
+                Err(format!(
+                    "Archive build args not supported for individual image '{image_name}'"
+                ))
             }
         },
         Image::Object {
@@ -223,6 +241,7 @@ struct FatImageParams<'a> {
     out: &'a str,
     variant: &'a FatVariant,
     files: &'a [FileEntry],
+    label: Option<&'a str>,
     size: &'a i64,
     size_unit: &'a str,
     input_dirs: &'a [PathBuf],
@@ -264,13 +283,17 @@ fn build_fat_image(params: FatImageParams) -> Result<(), String> {
     let base_path = PathBuf::from(".");
 
     // Create FAT image options
-    let options = fat::FatImageOptions::new()
+    let mut options = fat::FatImageOptions::new()
         .with_manifest_path(&temp_manifest_path)
         .with_base_path(&base_path)
         .with_output_path(&output_path)
         .with_size_mebibytes(size_mb)
         .with_fat_type(fat_type)
         .with_verbose(params.verbose);
+
+    if let Some(lbl) = params.label {
+        options = options.with_label(lbl);
+    }
 
     // Build the FAT image
     let result = fat::create_fat_image(&options);
@@ -478,6 +501,58 @@ fn build_fwup_with_env_vars(
   configuration: '{}'",
         output_path.display(),
         template_path.display()
+    ));
+
+    Ok(())
+}
+
+/// Build a storage device archive by packaging all built images into a tar.
+/// This is the fwup-free path for targets that handle disk image creation
+/// in their provisioning scripts (e.g., RPi tryboot using sfdisk + dd).
+fn build_archive(
+    device_name: &str,
+    device: &crate::manifest::StorageDevice,
+    build_dir: &Path,
+    verbose: bool,
+) -> Result<(), String> {
+    let output_path = build_dir.join(&device.out);
+
+    let archive_file = fs::File::create(&output_path)
+        .map_err(|e| format!("Failed to create archive '{}': {e}", output_path.display()))?;
+    let mut tar_builder = tar::Builder::new(archive_file);
+
+    for (image_name, image) in &device.images {
+        let out_name = image.out();
+        let image_path = build_dir.join(out_name);
+
+        if !image_path.exists() {
+            if verbose {
+                log_debug(&format!(
+                    "Skipping image '{image_name}' — not found at '{}'.",
+                    image_path.display()
+                ));
+            }
+            continue;
+        }
+
+        if verbose {
+            log_debug(&format!(
+                "Adding image '{image_name}' ({out_name}) to archive."
+            ));
+        }
+
+        tar_builder
+            .append_path_with_name(&image_path, out_name)
+            .map_err(|e| format!("Failed to add '{out_name}' to archive: {e}"))?;
+    }
+
+    tar_builder
+        .finish()
+        .map_err(|e| format!("Failed to finalize archive: {e}"))?;
+
+    log_success(&format!(
+        "Created archive '{}' for storage device '{device_name}'.",
+        output_path.display()
     ));
 
     Ok(())
