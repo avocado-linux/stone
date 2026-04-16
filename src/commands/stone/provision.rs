@@ -157,7 +157,7 @@ fn build_storage_device(
                 "Building storage device '{device_name}' as archive (images only, no fwup)."
             ));
 
-            build_archive(device_name, device, build_dir, verbose)?;
+            build_archive(device_name, device, input_dirs, build_dir, verbose)?;
         }
         BuildArgs::Fat { .. } => {
             return Err("FAT build args not supported for storage devices".to_string());
@@ -512,6 +512,7 @@ fn build_fwup_with_env_vars(
 fn build_archive(
     device_name: &str,
     device: &crate::manifest::StorageDevice,
+    input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
 ) -> Result<(), String> {
@@ -523,17 +524,24 @@ fn build_archive(
 
     for (image_name, image) in &device.images {
         let out_name = image.out();
-        let image_path = build_dir.join(out_name);
 
-        if !image_path.exists() {
-            if verbose {
-                log_debug(&format!(
-                    "Skipping image '{image_name}' — not found at '{}'.",
-                    image_path.display()
-                ));
+        // Built images (FAT, etc.) are in build_dir. Pre-existing images
+        // (string refs like rootfs, var) are in input directories.
+        let image_path = {
+            let in_build = build_dir.join(out_name);
+            if in_build.exists() {
+                in_build
+            } else if let Some(found) = find_file_in_dirs(out_name, input_dirs) {
+                found
+            } else {
+                if verbose {
+                    log_debug(&format!(
+                        "Skipping image '{image_name}' — not found in build dir or input dirs.",
+                    ));
+                }
+                continue;
             }
-            continue;
-        }
+        };
 
         if verbose {
             log_debug(&format!(
