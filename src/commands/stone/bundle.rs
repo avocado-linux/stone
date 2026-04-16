@@ -50,6 +50,10 @@ pub struct BundleArgs {
     #[arg(long = "build-dir", value_name = "DIR")]
     pub build_dir: Option<PathBuf>,
 
+    /// Overlay files to deep-merge onto the base manifest (applied left-to-right)
+    #[arg(long = "overlay", value_name = "PATH")]
+    pub overlays: Vec<PathBuf>,
+
     /// Enable verbose output
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
@@ -64,6 +68,7 @@ impl BundleArgs {
             &self.input_dirs,
             &self.output,
             self.build_dir.as_deref(),
+            &self.overlays,
             self.verbose,
         )
     }
@@ -98,6 +103,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn bundle_command(
     manifest_path: &Path,
     os_release_path: &Path,
@@ -105,6 +111,7 @@ pub fn bundle_command(
     input_dirs: &[PathBuf],
     output_path: &Path,
     build_dir_override: Option<&Path>,
+    overlay_paths: &[PathBuf],
     verbose: bool,
 ) -> Result<(), String> {
     // Validate inputs exist
@@ -121,7 +128,7 @@ pub fn bundle_command(
         ));
     }
 
-    let manifest = Manifest::from_file(manifest_path)?;
+    let (manifest, merged_json) = Manifest::load_and_merge(manifest_path, overlay_paths)?;
 
     // Determine build directory
     let default_build_dir = output_path
@@ -162,6 +169,7 @@ pub fn bundle_command(
         os_release_initrd_path,
         input_dirs,
         build_dir,
+        merged_json.as_deref(),
         verbose,
     )?;
 
@@ -221,6 +229,7 @@ struct BundleArtifact {
 }
 
 /// Copy manifest inputs to the build directory (mirrors stone create behavior)
+#[allow(clippy::too_many_arguments)]
 fn copy_manifest_inputs(
     manifest: &Manifest,
     manifest_path: &Path,
@@ -228,11 +237,18 @@ fn copy_manifest_inputs(
     os_release_initrd_path: Option<&Path>,
     input_dirs: &[PathBuf],
     build_dir: &Path,
+    merged_manifest_json: Option<&str>,
     verbose: bool,
 ) -> Result<(), String> {
-    // Copy the manifest itself
+    // Write the manifest — merged JSON when overlays were applied, or copy original
     let manifest_dest = build_dir.join("manifest.json");
-    copy_file(manifest_path, &manifest_dest, verbose)?;
+    if let Some(json_str) = merged_manifest_json {
+        fs::write(&manifest_dest, json_str).map_err(|e| {
+            format!("Failed to write merged manifest to '{}': {}", manifest_dest.display(), e)
+        })?;
+    } else {
+        copy_file(manifest_path, &manifest_dest, verbose)?;
+    }
 
     // Copy os-release
     let os_release_dest = build_dir.join("os-release");

@@ -37,6 +37,10 @@ pub struct CreateArgs {
     )]
     pub output_dir: PathBuf,
 
+    /// Overlay files to deep-merge onto the base manifest (applied left-to-right)
+    #[arg(long = "overlay", value_name = "PATH")]
+    pub overlays: Vec<PathBuf>,
+
     /// Enable verbose output
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
@@ -49,6 +53,7 @@ impl CreateArgs {
             &self.os_release,
             &self.input_dirs,
             &self.output_dir,
+            &self.overlays,
             self.verbose,
         )
     }
@@ -70,6 +75,7 @@ pub fn create_command(
     os_release_path: &Path,
     input_dirs: &[PathBuf],
     output_dir: &PathBuf,
+    overlay_paths: &[PathBuf],
     verbose: bool,
 ) -> Result<(), String> {
     // Check if manifest file exists
@@ -88,7 +94,7 @@ pub fn create_command(
         ));
     }
 
-    let manifest = Manifest::from_file(manifest_path)?;
+    let (manifest, merged_json) = Manifest::load_and_merge(manifest_path, overlay_paths)?;
 
     // Ensure output directory exists
     if let Err(e) = fs::create_dir_all(output_dir) {
@@ -186,9 +192,19 @@ pub fn create_command(
         }
     }
 
-    // Copy the manifest file to the output directory as manifest.json
+    // Write the manifest to the output directory — merged JSON when overlays
+    // are present, or a byte-for-byte copy of the original otherwise
     let manifest_output_path = output_dir.join("manifest.json");
-    if let Err(e) = copy_file(manifest_path, &manifest_output_path, verbose) {
+    if let Some(json_str) = &merged_json {
+        if let Err(e) = fs::write(&manifest_output_path, json_str) {
+            errors.push(format!("Failed to write merged manifest: {e}"));
+        } else if verbose {
+            log_debug(&format!(
+                "Wrote merged manifest to '{}'",
+                manifest_output_path.display()
+            ));
+        }
+    } else if let Err(e) = copy_file(manifest_path, &manifest_output_path, verbose) {
         errors.push(format!(
             "Failed to copy manifest file '{}': {e}",
             manifest_path.display()

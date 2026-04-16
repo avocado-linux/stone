@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -329,6 +330,83 @@ impl Manifest {
         })
     }
 
+    /// Load a manifest from a base file, then deep-merge each overlay file
+    /// on top in order (left-to-right, last wins). The merged JSON is then
+    /// deserialized into a typed `Manifest`.
+    pub fn from_file_with_overlays(
+        base_path: &std::path::Path,
+        overlay_paths: &[std::path::PathBuf],
+    ) -> Result<Self, String> {
+        if overlay_paths.is_empty() {
+            return Self::from_file(base_path);
+        }
+
+        let (manifest, _) = Self::load_and_merge(base_path, overlay_paths)?;
+        Ok(manifest)
+    }
+
+    /// Load a manifest with overlays, returning both the typed Manifest and
+    /// the pretty-printed merged JSON string (for commands that need to write
+    /// the merged manifest to disk).
+    pub fn load_and_merge(
+        base_path: &std::path::Path,
+        overlay_paths: &[std::path::PathBuf],
+    ) -> Result<(Self, Option<String>), String> {
+        if overlay_paths.is_empty() {
+            let manifest = Self::from_file(base_path)?;
+            return Ok((manifest, None));
+        }
+
+        let base_content = std::fs::read_to_string(base_path).map_err(|e| {
+            format!(
+                "[ERROR] Failed to read manifest file '{}': {}",
+                base_path.display(),
+                e
+            )
+        })?;
+        let mut merged: Value = serde_json::from_str(&base_content).map_err(|e| {
+            format!(
+                "[ERROR] Failed to parse manifest JSON '{}': {}",
+                base_path.display(),
+                e
+            )
+        })?;
+
+        for overlay_path in overlay_paths {
+            let overlay_content = std::fs::read_to_string(overlay_path).map_err(|e| {
+                format!(
+                    "[ERROR] Failed to read overlay file '{}': {}",
+                    overlay_path.display(),
+                    e
+                )
+            })?;
+            let overlay_value: Value = serde_json::from_str(&overlay_content).map_err(|e| {
+                format!(
+                    "[ERROR] Failed to parse overlay JSON '{}': {}",
+                    overlay_path.display(),
+                    e
+                )
+            })?;
+            deep_merge_json(&mut merged, overlay_value);
+        }
+
+        let merged_json =
+            serde_json::to_string_pretty(&merged).map_err(|e| {
+                format!("[ERROR] Failed to serialize merged manifest: {}", e)
+            })?;
+
+        let manifest: Self = serde_json::from_value(merged).map_err(|e| {
+            format!(
+                "[ERROR] Merged manifest (base '{}' + {} overlay(s)) is invalid: {}",
+                base_path.display(),
+                overlay_paths.len(),
+                e
+            )
+        })?;
+
+        Ok((manifest, Some(merged_json)))
+    }
+
     pub fn get_provision_profile(&self, profile_name: &str) -> Option<&ProvisionProfile> {
         self.provision.as_ref()?.profiles.get(profile_name)
     }
@@ -431,6 +509,47 @@ impl Provision {
         }
 
         (result, missing_vars)
+    }
+}
+
+/// Deep-merge two JSON values. Objects are merged recursively (overlay keys
+/// win on conflict). Arrays of named objects (elements with a `"name"` string
+/// field) are merged by matching names. All other values (scalars, unnamed
+/// arrays) in `overlay` replace `base` entirely.
+pub fn deep_merge_json(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Object(base_map), Value::Object(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                let entry = base_map.entry(key).or_insert(Value::Null);
+                deep_merge_json(entry, overlay_val);
+            }
+        }
+        (Value::Array(base_arr), Value::Array(overlay_arr)) => {
+            // Name-based merge: if all overlay elements are objects with "name" fields,
+            // match to base elements by name and deep-merge individually
+            let all_named = !overlay_arr.is_empty()
+                && overlay_arr
+                    .iter()
+                    .all(|v| v.get("name").and_then(|n| n.as_str()).is_some());
+            if all_named {
+                for overlay_elem in overlay_arr {
+                    let name = overlay_elem.get("name").unwrap().as_str().unwrap();
+                    if let Some(base_elem) = base_arr
+                        .iter_mut()
+                        .find(|b| b.get("name").and_then(|n| n.as_str()) == Some(name))
+                    {
+                        deep_merge_json(base_elem, overlay_elem);
+                    } else {
+                        base_arr.push(overlay_elem);
+                    }
+                }
+            } else {
+                *base_arr = overlay_arr;
+            }
+        }
+        (base, overlay) => {
+            *base = overlay;
+        }
     }
 }
 
@@ -917,5 +1036,287 @@ mod tests {
         assert!(manifest.get_provision_profile("profile1").is_some());
         assert!(manifest.get_provision_profile("nonexistent").is_none());
         assert_eq!(manifest.get_provision_default(), Some("default_profile"));
+    }
+
+    // --- deep_merge_json tests ---
+
+    #[test]
+    fn test_deep_merge_scalar_override() {
+        let mut base = serde_json::json!({"runtime": {"platform": "a", "architecture": "arm64"}});
+        let overlay = serde_json::json!({"runtime": {"platform": "b"}});
+        deep_merge_json(&mut base, overlay);
+        assert_eq!(base["runtime"]["platform"], "b");
+        assert_eq!(base["runtime"]["architecture"], "arm64");
+    }
+
+    #[test]
+    fn test_deep_merge_adds_new_keys() {
+        let mut base = serde_json::json!({"runtime": {"platform": "a"}});
+        let overlay = serde_json::json!({"runtime": {"architecture": "arm64"}});
+        deep_merge_json(&mut base, overlay);
+        assert_eq!(base["runtime"]["platform"], "a");
+        assert_eq!(base["runtime"]["architecture"], "arm64");
+    }
+
+    #[test]
+    fn test_deep_merge_nested_objects() {
+        let mut base = serde_json::json!({
+            "storage_devices": {
+                "rootdisk": {
+                    "images": {
+                        "boot": {"out": "boot.img", "size": 128}
+                    }
+                }
+            }
+        });
+        let overlay = serde_json::json!({
+            "storage_devices": {
+                "rootdisk": {
+                    "images": {
+                        "rootfs": "rootfs.img"
+                    }
+                }
+            }
+        });
+        deep_merge_json(&mut base, overlay);
+        assert_eq!(base["storage_devices"]["rootdisk"]["images"]["boot"]["out"], "boot.img");
+        assert_eq!(base["storage_devices"]["rootdisk"]["images"]["rootfs"], "rootfs.img");
+    }
+
+    #[test]
+    fn test_deep_merge_named_array_merge_by_name() {
+        let mut base = serde_json::json!({
+            "partitions": [
+                {"name": "boot", "size": 128, "size_unit": "mebibytes"},
+                {"name": "var", "size": 512, "size_unit": "mebibytes", "expand": "true"}
+            ]
+        });
+        let overlay = serde_json::json!({
+            "partitions": [
+                {"name": "var", "size": 1024}
+            ]
+        });
+        deep_merge_json(&mut base, overlay);
+
+        let partitions = base["partitions"].as_array().unwrap();
+        assert_eq!(partitions.len(), 2);
+        // boot unchanged
+        assert_eq!(partitions[0]["name"], "boot");
+        assert_eq!(partitions[0]["size"], 128);
+        // var merged — size changed, other fields preserved
+        assert_eq!(partitions[1]["name"], "var");
+        assert_eq!(partitions[1]["size"], 1024);
+        assert_eq!(partitions[1]["size_unit"], "mebibytes");
+        assert_eq!(partitions[1]["expand"], "true");
+    }
+
+    #[test]
+    fn test_deep_merge_named_array_appends_new() {
+        let mut base = serde_json::json!({
+            "partitions": [
+                {"name": "boot", "size": 128, "size_unit": "mebibytes"}
+            ]
+        });
+        let overlay = serde_json::json!({
+            "partitions": [
+                {"name": "data", "size": 2048, "size_unit": "mebibytes"}
+            ]
+        });
+        deep_merge_json(&mut base, overlay);
+
+        let partitions = base["partitions"].as_array().unwrap();
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions[0]["name"], "boot");
+        assert_eq!(partitions[1]["name"], "data");
+        assert_eq!(partitions[1]["size"], 2048);
+    }
+
+    #[test]
+    fn test_deep_merge_named_array_preserves_unmatched() {
+        let mut base = serde_json::json!({
+            "partitions": [
+                {"name": "boot", "size": 128, "size_unit": "mebibytes"},
+                {"name": "rootfs", "size": 160, "size_unit": "mebibytes"},
+                {"name": "var", "size": 512, "size_unit": "mebibytes"}
+            ]
+        });
+        let overlay = serde_json::json!({
+            "partitions": [
+                {"name": "var", "size": 1024}
+            ]
+        });
+        deep_merge_json(&mut base, overlay);
+
+        let partitions = base["partitions"].as_array().unwrap();
+        assert_eq!(partitions.len(), 3);
+        assert_eq!(partitions[0]["name"], "boot");
+        assert_eq!(partitions[0]["size"], 128);
+        assert_eq!(partitions[1]["name"], "rootfs");
+        assert_eq!(partitions[1]["size"], 160);
+        assert_eq!(partitions[2]["name"], "var");
+        assert_eq!(partitions[2]["size"], 1024);
+    }
+
+    #[test]
+    fn test_deep_merge_unnamed_array_replaces() {
+        let mut base = serde_json::json!({"files": ["a.txt", "b.txt", "c.txt"]});
+        let overlay = serde_json::json!({"files": ["x.txt"]});
+        deep_merge_json(&mut base, overlay);
+        assert_eq!(base["files"], serde_json::json!(["x.txt"]));
+    }
+
+    #[test]
+    fn test_deep_merge_empty_overlay() {
+        let mut base = serde_json::json!({"runtime": {"platform": "test"}});
+        let original = base.clone();
+        deep_merge_json(&mut base, serde_json::json!({}));
+        assert_eq!(base, original);
+    }
+
+    #[test]
+    fn test_deep_merge_multiple_overlays_ordered() {
+        let mut base = serde_json::json!({"runtime": {"platform": "original"}});
+        deep_merge_json(
+            &mut base,
+            serde_json::json!({"runtime": {"platform": "first"}}),
+        );
+        deep_merge_json(
+            &mut base,
+            serde_json::json!({"runtime": {"platform": "second"}}),
+        );
+        assert_eq!(base["runtime"]["platform"], "second");
+    }
+
+    #[test]
+    fn test_deep_merge_adds_top_level_section() {
+        let mut base = serde_json::json!({
+            "runtime": {"platform": "test", "architecture": "arm64"},
+            "storage_devices": {}
+        });
+        let overlay = serde_json::json!({
+            "provision": {
+                "profiles": {
+                    "img": {"script": "provision.sh"}
+                }
+            }
+        });
+        deep_merge_json(&mut base, overlay);
+        assert_eq!(base["provision"]["profiles"]["img"]["script"], "provision.sh");
+        assert_eq!(base["runtime"]["platform"], "test");
+    }
+
+    #[test]
+    fn test_from_file_with_overlays_integration() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let base_json = r#"{
+            "runtime": {"platform": "base-platform", "architecture": "arm64"},
+            "storage_devices": {
+                "rootdisk": {
+                    "out": "disk.img",
+                    "devpath": "/dev/mmcblk0",
+                    "images": {},
+                    "partitions": [
+                        {"name": "boot", "size": 128, "size_unit": "mebibytes"},
+                        {"name": "var", "size": 512, "size_unit": "mebibytes"}
+                    ]
+                }
+            }
+        }"#;
+        let overlay_json = r#"{
+            "runtime": {"platform": "overlay-platform"},
+            "storage_devices": {
+                "rootdisk": {
+                    "partitions": [
+                        {"name": "var", "size": 1024}
+                    ]
+                }
+            }
+        }"#;
+
+        let base_path = dir.path().join("base.json");
+        let overlay_path = dir.path().join("overlay.json");
+        std::fs::write(&base_path, base_json).unwrap();
+        std::fs::write(&overlay_path, overlay_json).unwrap();
+
+        let manifest =
+            Manifest::from_file_with_overlays(&base_path, &[overlay_path]).unwrap();
+
+        assert_eq!(manifest.runtime.platform, "overlay-platform");
+        assert_eq!(manifest.runtime.architecture, "arm64");
+
+        let rootdisk = manifest.storage_devices.get("rootdisk").unwrap();
+        assert_eq!(rootdisk.partitions.len(), 2);
+        assert_eq!(rootdisk.partitions[0].name, Some("boot".to_string()));
+        assert_eq!(rootdisk.partitions[0].size, 128);
+        assert_eq!(rootdisk.partitions[1].name, Some("var".to_string()));
+        assert_eq!(rootdisk.partitions[1].size, 1024);
+    }
+
+    #[test]
+    fn test_from_file_with_overlays_bad_json() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let base_path = dir.path().join("base.json");
+        let overlay_path = dir.path().join("bad.json");
+        std::fs::write(
+            &base_path,
+            r#"{"runtime":{"platform":"x","architecture":"y"},"storage_devices":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(&overlay_path, "not valid json{{{").unwrap();
+
+        let err = Manifest::from_file_with_overlays(&base_path, &[overlay_path.clone()])
+            .unwrap_err();
+        assert!(err.contains("Failed to parse overlay JSON"));
+        assert!(err.contains("bad.json"));
+    }
+
+    #[test]
+    fn test_from_file_with_overlays_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("base.json");
+        std::fs::write(
+            &base_path,
+            r#"{"runtime":{"platform":"x","architecture":"y"},"storage_devices":{}}"#,
+        )
+        .unwrap();
+
+        let overlay_path = dir.path().join("nonexistent.json");
+        let err = Manifest::from_file_with_overlays(&base_path, &[overlay_path]).unwrap_err();
+        assert!(err.contains("Failed to read overlay file"));
+    }
+
+    #[test]
+    fn test_load_and_merge_returns_json_string() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("base.json");
+        let overlay_path = dir.path().join("overlay.json");
+        std::fs::write(
+            &base_path,
+            r#"{"runtime":{"platform":"a","architecture":"arm64"},"storage_devices":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(&overlay_path, r#"{"runtime":{"platform":"b"}}"#).unwrap();
+
+        let (manifest, merged_json) =
+            Manifest::load_and_merge(&base_path, &[overlay_path]).unwrap();
+        assert_eq!(manifest.runtime.platform, "b");
+        let json_str = merged_json.unwrap();
+        assert!(json_str.contains("\"platform\": \"b\""));
+    }
+
+    #[test]
+    fn test_load_and_merge_no_overlays_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("base.json");
+        std::fs::write(
+            &base_path,
+            r#"{"runtime":{"platform":"a","architecture":"arm64"},"storage_devices":{}}"#,
+        )
+        .unwrap();
+
+        let (_, merged_json) = Manifest::load_and_merge(&base_path, &[]).unwrap();
+        assert!(merged_json.is_none());
     }
 }

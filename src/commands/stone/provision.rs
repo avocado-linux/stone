@@ -20,6 +20,10 @@ pub struct ProvisionArgs {
     )]
     pub input_dirs: Vec<PathBuf>,
 
+    /// Overlay files to deep-merge onto the base manifest (applied left-to-right)
+    #[arg(long = "overlay", value_name = "PATH")]
+    pub overlays: Vec<PathBuf>,
+
     /// Enable verbose output
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
@@ -27,7 +31,7 @@ pub struct ProvisionArgs {
 
 impl ProvisionArgs {
     pub fn execute(&self) -> Result<(), String> {
-        provision_command(&self.input_dirs, self.verbose)
+        provision_command(&self.input_dirs, &self.overlays, self.verbose)
     }
 }
 
@@ -42,13 +46,17 @@ fn find_file_in_dirs(filename: &str, input_dirs: &[PathBuf]) -> Option<PathBuf> 
     None
 }
 
-pub fn provision_command(input_dirs: &[PathBuf], verbose: bool) -> Result<(), String> {
+pub fn provision_command(
+    input_dirs: &[PathBuf],
+    overlay_paths: &[PathBuf],
+    verbose: bool,
+) -> Result<(), String> {
     // Find manifest.json in the input directories
     let manifest_path = find_file_in_dirs("manifest.json", input_dirs).ok_or_else(|| {
         "Manifest file 'manifest.json' not found in any input directory.".to_string()
     })?;
 
-    let manifest = Manifest::from_file(&manifest_path)?;
+    let manifest = Manifest::from_file_with_overlays(&manifest_path, overlay_paths)?;
 
     // Determine the directory containing the manifest
     let input_dir = manifest_path

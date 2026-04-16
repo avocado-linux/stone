@@ -594,3 +594,89 @@ fn test_create_with_multiple_input_dirs_not_found() {
         .failure()
         .stdout(str::contains("not found in any input directory"));
 }
+
+#[test]
+fn test_create_with_overlay_writes_merged_manifest() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path().join("input");
+    let output_path = temp_dir.path().join("output");
+    fs::create_dir_all(&input_path).unwrap();
+    fs::create_dir_all(&output_path).unwrap();
+
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "base-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "rootdisk": {
+                "out": "disk.img",
+                "devpath": "/dev/mmcblk0",
+                "images": {
+                    "boot": "boot.img"
+                },
+                "partitions": [
+                    {"name": "boot", "size": 128, "size_unit": "mebibytes"},
+                    {"name": "var", "size": 512, "size_unit": "mebibytes"}
+                ]
+            }
+        }
+    }"#;
+
+    let overlay_content = r#"{
+        "runtime": {
+            "platform": "overlaid-platform"
+        },
+        "storage_devices": {
+            "rootdisk": {
+                "partitions": [
+                    {"name": "var", "size": 1024}
+                ]
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path.join("manifest.json");
+    let overlay_path = input_path.join("overlay.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(&overlay_path, overlay_content).unwrap();
+    fs::write(input_path.join("boot.img"), "boot content").unwrap();
+    fs::write(input_path.join("os-release"), "NAME=Test\nVERSION_ID=1.0").unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "create",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--os-release",
+            &input_path.join("os-release").to_string_lossy(),
+            "--output-dir",
+            &output_path.to_string_lossy(),
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--overlay",
+            &overlay_path.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+
+    // The output manifest.json should contain the merged values
+    let output_manifest = fs::read_to_string(output_path.join("manifest.json")).unwrap();
+    assert!(
+        output_manifest.contains("overlaid-platform"),
+        "Output manifest should contain the overlaid platform"
+    );
+    // The var partition should have the merged size
+    assert!(
+        output_manifest.contains("1024"),
+        "Output manifest should contain the overlaid var partition size"
+    );
+    // The boot partition should still be present from the base
+    assert!(
+        output_manifest.contains("\"boot\""),
+        "Output manifest should still contain the boot partition"
+    );
+}

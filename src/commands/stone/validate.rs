@@ -23,11 +23,15 @@ pub struct ValidateArgs {
         default_value = "."
     )]
     pub input_dirs: Vec<PathBuf>,
+
+    /// Overlay files to deep-merge onto the base manifest (applied left-to-right)
+    #[arg(long = "overlay", value_name = "PATH")]
+    pub overlays: Vec<PathBuf>,
 }
 
 impl ValidateArgs {
     pub fn execute(&self) -> Result<(), String> {
-        validate_command(&self.manifest, &self.input_dirs)
+        validate_command(&self.manifest, &self.input_dirs, &self.overlays)
     }
 }
 
@@ -42,7 +46,11 @@ fn find_file_in_dirs(filename: &str, input_dirs: &[PathBuf]) -> Option<PathBuf> 
     None
 }
 
-pub fn validate_command(manifest_path: &Path, input_dirs: &[PathBuf]) -> Result<(), String> {
+pub fn validate_command(
+    manifest_path: &Path,
+    input_dirs: &[PathBuf],
+    overlay_paths: &[PathBuf],
+) -> Result<(), String> {
     // Check if manifest file exists
     if !manifest_path.exists() {
         return Err(format!(
@@ -51,7 +59,7 @@ pub fn validate_command(manifest_path: &Path, input_dirs: &[PathBuf]) -> Result<
         ));
     }
 
-    let manifest = Manifest::from_file(manifest_path)?;
+    let manifest = Manifest::from_file_with_overlays(manifest_path, overlay_paths)?;
 
     // Validate all files referenced in the manifest
     let mut missing_files = Vec::new();

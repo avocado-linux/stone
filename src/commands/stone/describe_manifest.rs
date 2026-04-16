@@ -13,15 +13,22 @@ pub struct DescribeManifestArgs {
         default_value = "manifest.json"
     )]
     pub manifest: PathBuf,
+
+    /// Overlay files to deep-merge onto the base manifest (applied left-to-right)
+    #[arg(long = "overlay", value_name = "PATH")]
+    pub overlays: Vec<PathBuf>,
 }
 
 impl DescribeManifestArgs {
     pub fn execute(&self) -> Result<(), String> {
-        describe_manifest_command(&self.manifest)
+        describe_manifest_command(&self.manifest, &self.overlays)
     }
 }
 
-pub fn describe_manifest_command(manifest_path: &Path) -> Result<(), String> {
+pub fn describe_manifest_command(
+    manifest_path: &Path,
+    overlay_paths: &[PathBuf],
+) -> Result<(), String> {
     // Check if manifest file exists
     if !manifest_path.exists() {
         return Err(format!(
@@ -30,7 +37,7 @@ pub fn describe_manifest_command(manifest_path: &Path) -> Result<(), String> {
         ));
     }
 
-    let manifest = Manifest::from_file(manifest_path)?;
+    let manifest = Manifest::from_file_with_overlays(manifest_path, overlay_paths)?;
     describe_manifest(&manifest)?;
     log_success("Described manifest.");
     Ok(())

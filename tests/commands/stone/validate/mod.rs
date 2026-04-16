@@ -635,3 +635,184 @@ fn test_validate_with_multiple_input_dirs_not_found() {
         .failure()
         .stdout(contains("test.img"));
 }
+
+// --- Overlay tests ---
+
+#[test]
+fn test_validate_with_overlay() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "rootdisk": {
+                "out": "disk.img",
+                "devpath": "/dev/mmcblk0",
+                "images": {
+                    "boot": "boot.img"
+                },
+                "partitions": [
+                    {"name": "boot", "size": 128, "size_unit": "mebibytes"},
+                    {"name": "var", "size": 512, "size_unit": "mebibytes"}
+                ]
+            }
+        }
+    }"#;
+
+    // Overlay changes the image reference to a different file
+    let overlay_content = r#"{
+        "storage_devices": {
+            "rootdisk": {
+                "images": {
+                    "boot": "custom-boot.img"
+                }
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path.join("manifest.json");
+    let overlay_path = input_path.join("overlay.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(&overlay_path, overlay_content).unwrap();
+    // Create the file the overlay references
+    fs::write(input_path.join("custom-boot.img"), "custom boot").unwrap();
+
+    // Should succeed — the overlay changed the image ref to one that exists
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--overlay",
+            &overlay_path.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_validate_overlay_file_not_found() {
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            "tests/fixtures/coverage/stone.json",
+            "--input-dir",
+            "tests/fixtures/coverage",
+            "--overlay",
+            "/tmp/nonexistent_overlay_12345.json",
+        ])
+        .assert()
+        .failure()
+        .stdout(contains("Failed to read overlay file"));
+}
+
+#[test]
+fn test_validate_overlay_invalid_json() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let bad_overlay = temp_dir.path().join("bad.json");
+    fs::write(&bad_overlay, "not valid json{{{").unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            "tests/fixtures/coverage/stone.json",
+            "--input-dir",
+            "tests/fixtures/coverage",
+            "--overlay",
+            &bad_overlay.to_string_lossy(),
+        ])
+        .assert()
+        .failure()
+        .stdout(contains("Failed to parse overlay JSON"));
+}
+
+#[test]
+fn test_validate_with_multiple_overlays_order() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch"
+        },
+        "storage_devices": {
+            "rootdisk": {
+                "out": "disk.img",
+                "devpath": "/dev/mmcblk0",
+                "images": {
+                    "boot": "first.img"
+                },
+                "partitions": []
+            }
+        }
+    }"#;
+
+    // First overlay changes image ref
+    let overlay1 = r#"{
+        "storage_devices": {
+            "rootdisk": {
+                "images": {
+                    "boot": "second.img"
+                }
+            }
+        }
+    }"#;
+
+    // Second overlay overrides it again — last wins
+    let overlay2 = r#"{
+        "storage_devices": {
+            "rootdisk": {
+                "images": {
+                    "boot": "final.img"
+                }
+            }
+        }
+    }"#;
+
+    let manifest_path = input_path.join("manifest.json");
+    let overlay1_path = input_path.join("overlay1.json");
+    let overlay2_path = input_path.join("overlay2.json");
+    fs::write(&manifest_path, manifest_content).unwrap();
+    fs::write(&overlay1_path, overlay1).unwrap();
+    fs::write(&overlay2_path, overlay2).unwrap();
+    // Only create the file the final overlay references
+    fs::write(input_path.join("final.img"), "final image").unwrap();
+
+    // Should succeed — after both overlays, boot points to final.img which exists
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "validate",
+            "--manifest-path",
+            &manifest_path.to_string_lossy(),
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--overlay",
+            &overlay1_path.to_string_lossy(),
+            "--overlay",
+            &overlay2_path.to_string_lossy(),
+        ])
+        .assert()
+        .success();
+}
