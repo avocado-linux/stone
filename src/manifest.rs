@@ -150,6 +150,10 @@ pub struct Runtime {
 pub struct Provision {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub envs: Option<HashMap<String, HashMap<String, String>>>,
+    /// Extra files to include alongside provision profile scripts (e.g., shared
+    /// helper libraries that scripts source at runtime).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
     pub profiles: HashMap<String, ProvisionProfile>,
 }
 
@@ -900,6 +904,7 @@ mod tests {
 
         let provision = Provision {
             envs: None,
+            files: vec![],
             profiles: HashMap::new(),
         };
 
@@ -932,6 +937,7 @@ mod tests {
     fn test_provision_env_expansion_undefined_vars() {
         let provision = Provision {
             envs: None,
+            files: vec![],
             profiles: HashMap::new(),
         };
 
@@ -964,6 +970,7 @@ mod tests {
 
         let provision = Provision {
             envs: None,
+            files: vec![],
             profiles: HashMap::new(),
         };
 
@@ -994,6 +1001,7 @@ mod tests {
 
         let provision = Provision {
             envs: None,
+            files: vec![],
             profiles: HashMap::new(),
         };
 

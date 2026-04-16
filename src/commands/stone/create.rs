@@ -169,7 +169,7 @@ pub fn create_command(
         }
     }
 
-    // Copy provision profile scripts
+    // Copy provision profile scripts and extra files
     if let Some(provision) = &manifest.provision {
         for (profile_name, profile) in &provision.profiles {
             match find_file_in_dirs(&profile.script, input_dirs) {
@@ -186,6 +186,23 @@ pub fn create_command(
                     errors.push(format!(
                         "Failed to copy provision profile script '{}' for profile '{profile_name}': not found in any input directory",
                         profile.script
+                    ));
+                }
+            }
+        }
+
+        // Copy extra provision files (shared helpers, common libraries)
+        for file in &provision.files {
+            match find_file_in_dirs(file, input_dirs) {
+                Some(src) => {
+                    let dest = output_dir.join(file);
+                    if let Err(e) = copy_file(&src, &dest, verbose) {
+                        errors.push(format!("Failed to copy provision file '{file}': {e}"));
+                    }
+                }
+                None => {
+                    errors.push(format!(
+                        "Failed to copy provision file '{file}': not found in any input directory"
                     ));
                 }
             }
