@@ -306,11 +306,16 @@ fn copy_manifest_inputs(
         copy_file(&src, &build_dir.join(provision_file), verbose)?;
     }
 
-    // Copy provision profile scripts
+    // Copy provision profile scripts and extra files
     if let Some(provision) = &manifest.provision {
         for profile in provision.profiles.values() {
             if let Some(src) = find_file_in_dirs(&profile.script, input_dirs) {
                 copy_file(&src, &build_dir.join(&profile.script), verbose)?;
+            }
+        }
+        for file in &provision.files {
+            if let Some(src) = find_file_in_dirs(file, input_dirs) {
+                copy_file(&src, &build_dir.join(file), verbose)?;
             }
         }
     }
