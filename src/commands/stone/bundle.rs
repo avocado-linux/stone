@@ -663,6 +663,17 @@ fn generate_bundle_json(
         bundle["update"] = update_section;
     }
 
+    // Storage-agnostic strategies: GPT/PARTLABEL bundles must not bake the
+    // build-host's device path into bundle.json (the same archive applies to
+    // SD/eMMC/NVMe/SATA). Avocadoctl's runtime detection / PARTLABEL fallback
+    // handles those at update time.
+    let strategy = manifest
+        .runtime
+        .update_strategy
+        .as_deref()
+        .unwrap_or("uboot-ab");
+    let storage_agnostic = matches!(strategy, "rpi-tryboot");
+
     // Add layout section from storage_devices partitions
     // Compute sequential offsets for partitions that don't have explicit ones
     for device in manifest.storage_devices.values() {
@@ -700,10 +711,11 @@ fn generate_bundle_json(
                 })
                 .collect();
 
-            bundle["layout"] = serde_json::json!({
-                "device": device.devpath,
-                "partitions": partitions,
-            });
+            let mut layout = serde_json::json!({ "partitions": partitions });
+            if !storage_agnostic {
+                layout["device"] = serde_json::json!(device.devpath);
+            }
+            bundle["layout"] = layout;
 
             if let Some(block_size) = device.block_size {
                 bundle["layout"]["block_size"] = serde_json::json!(block_size);

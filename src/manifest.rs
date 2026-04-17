@@ -136,8 +136,13 @@ pub enum SlotAction {
     /// to redirect the EEPROM to the inactive slot on next tryboot reboot.
     #[serde(rename = "rpi-tryboot")]
     RpiTryboot {
-        devpath: String,
-        /// Map from slot name -> MBR partition number (1-indexed, e.g. {"a": 1, "b": 2})
+        /// Optional explicit boot device. Omit for storage-agnostic bundles
+        /// (the same archive must apply to SD/eMMC/NVMe/SATA installs); avocadoctl
+        /// derives the device at update time from /proc/cmdline.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        devpath: Option<String>,
+        /// Map from slot name -> GPT partition number (1-indexed, e.g. {"a": 1, "b": 2}).
+        /// Storage-agnostic because provisioning always uses the same GPT layout.
         boot_partitions: HashMap<String, u32>,
     },
 }
@@ -771,7 +776,7 @@ mod tests {
                 devpath,
                 boot_partitions,
             } => {
-                assert_eq!(devpath, "/dev/mmcblk0");
+                assert_eq!(devpath.as_deref(), Some("/dev/mmcblk0"));
                 assert_eq!(boot_partitions.get("a"), Some(&1));
                 assert_eq!(boot_partitions.get("b"), Some(&2));
             }
