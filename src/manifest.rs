@@ -394,10 +394,8 @@ impl Manifest {
             deep_merge_json(&mut merged, overlay_value);
         }
 
-        let merged_json =
-            serde_json::to_string_pretty(&merged).map_err(|e| {
-                format!("[ERROR] Failed to serialize merged manifest: {}", e)
-            })?;
+        let merged_json = serde_json::to_string_pretty(&merged)
+            .map_err(|e| format!("[ERROR] Failed to serialize merged manifest: {}", e))?;
 
         let manifest: Self = serde_json::from_value(merged).map_err(|e| {
             format!(
@@ -1087,8 +1085,14 @@ mod tests {
             }
         });
         deep_merge_json(&mut base, overlay);
-        assert_eq!(base["storage_devices"]["rootdisk"]["images"]["boot"]["out"], "boot.img");
-        assert_eq!(base["storage_devices"]["rootdisk"]["images"]["rootfs"], "rootfs.img");
+        assert_eq!(
+            base["storage_devices"]["rootdisk"]["images"]["boot"]["out"],
+            "boot.img"
+        );
+        assert_eq!(
+            base["storage_devices"]["rootdisk"]["images"]["rootfs"],
+            "rootfs.img"
+        );
     }
 
     #[test]
@@ -1209,7 +1213,10 @@ mod tests {
             }
         });
         deep_merge_json(&mut base, overlay);
-        assert_eq!(base["provision"]["profiles"]["img"]["script"], "provision.sh");
+        assert_eq!(
+            base["provision"]["profiles"]["img"]["script"],
+            "provision.sh"
+        );
         assert_eq!(base["runtime"]["platform"], "test");
     }
 
@@ -1247,8 +1254,7 @@ mod tests {
         std::fs::write(&base_path, base_json).unwrap();
         std::fs::write(&overlay_path, overlay_json).unwrap();
 
-        let manifest =
-            Manifest::from_file_with_overlays(&base_path, &[overlay_path]).unwrap();
+        let manifest = Manifest::from_file_with_overlays(&base_path, &[overlay_path]).unwrap();
 
         assert_eq!(manifest.runtime.platform, "overlay-platform");
         assert_eq!(manifest.runtime.architecture, "arm64");
@@ -1274,8 +1280,9 @@ mod tests {
         .unwrap();
         std::fs::write(&overlay_path, "not valid json{{{").unwrap();
 
-        let err = Manifest::from_file_with_overlays(&base_path, &[overlay_path.clone()])
-            .unwrap_err();
+        let err =
+            Manifest::from_file_with_overlays(&base_path, std::slice::from_ref(&overlay_path))
+                .unwrap_err();
         assert!(err.contains("Failed to parse overlay JSON"));
         assert!(err.contains("bad.json"));
     }

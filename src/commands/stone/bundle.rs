@@ -244,7 +244,11 @@ fn copy_manifest_inputs(
     let manifest_dest = build_dir.join("manifest.json");
     if let Some(json_str) = merged_manifest_json {
         fs::write(&manifest_dest, json_str).map_err(|e| {
-            format!("Failed to write merged manifest to '{}': {}", manifest_dest.display(), e)
+            format!(
+                "Failed to write merged manifest to '{}': {}",
+                manifest_dest.display(),
+                e
+            )
         })?;
     } else {
         copy_file(manifest_path, &manifest_dest, verbose)?;
