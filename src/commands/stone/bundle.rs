@@ -1,6 +1,8 @@
 use crate::fat;
 use crate::log::*;
-use crate::manifest::{BuildArgs, FatVariant, FileEntry, Image, Manifest};
+use crate::manifest::{
+    BuildArgs, FatVariant, FileEntry, Image, Manifest, resolve_partition_size_bytes, to_bytes,
+};
 use clap::Args;
 use sha2::{Digest, Sha256};
 
@@ -57,10 +59,17 @@ pub struct BundleArgs {
     /// Enable verbose output
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
+
+    /// Override a partition's size in bytes by name (repeatable, e.g.
+    /// `--partition-size var=536870912`). Used when the manifest omits `size`
+    /// for the last `expand: "true"` partition.
+    #[arg(long = "partition-size", value_name = "NAME=BYTES")]
+    pub partition_sizes: Vec<String>,
 }
 
 impl BundleArgs {
     pub fn execute(&self) -> Result<(), String> {
+        let overrides = parse_partition_size_overrides(&self.partition_sizes)?;
         bundle_command(
             &self.manifest,
             &self.os_release,
@@ -70,8 +79,32 @@ impl BundleArgs {
             self.build_dir.as_deref(),
             &self.overlays,
             self.verbose,
+            &overrides,
         )
     }
+}
+
+/// Parse `NAME=BYTES` strings (as accepted by `--partition-size`) into a map.
+pub fn parse_partition_size_overrides(
+    raw: &[String],
+) -> Result<HashMap<String, u64>, String> {
+    let mut map = HashMap::new();
+    for spec in raw {
+        let (name, value) = spec.split_once('=').ok_or_else(|| {
+            format!("--partition-size expects NAME=BYTES, got '{spec}'")
+        })?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(format!(
+                "--partition-size has empty partition name in '{spec}'"
+            ));
+        }
+        let bytes: u64 = value.trim().parse().map_err(|e| {
+            format!("--partition-size '{spec}' has non-integer byte value: {e}")
+        })?;
+        map.insert(name.to_string(), bytes);
+    }
+    Ok(map)
 }
 
 /// Find a file in multiple input directories, searching in order
@@ -113,6 +146,7 @@ pub fn bundle_command(
     build_dir_override: Option<&Path>,
     overlay_paths: &[PathBuf],
     verbose: bool,
+    partition_size_overrides: &HashMap<String, u64>,
 ) -> Result<(), String> {
     // Validate inputs exist
     if !manifest_path.exists() {
@@ -196,6 +230,7 @@ pub fn bundle_command(
         &artifacts,
         &os_build_id,
         initramfs_build_id.as_deref(),
+        partition_size_overrides,
     )?;
     let bundle_json_path = build_dir.join("bundle.json");
     let bundle_json_str = serde_json::to_string_pretty(&bundle_json)
@@ -571,6 +606,7 @@ fn generate_bundle_json(
     artifacts: &[BundleArtifact],
     os_build_id: &str,
     initramfs_build_id: Option<&str>,
+    partition_size_overrides: &HashMap<String, u64>,
 ) -> Result<serde_json::Value, String> {
     let update = manifest.update.as_ref();
 
@@ -659,37 +695,38 @@ fn generate_bundle_json(
     for device in manifest.storage_devices.values() {
         if !device.partitions.is_empty() {
             let mut cursor_bytes: u64 = 0;
-            let partitions: Vec<serde_json::Value> = device
-                .partitions
-                .iter()
-                .map(|p| {
-                    let mut part = serde_json::json!({});
-                    if let Some(name) = &p.name {
-                        part["name"] = serde_json::json!(name);
-                    }
-                    part["size"] = serde_json::json!(p.size);
-                    part["size_unit"] = serde_json::json!(p.size_unit);
+            let mut partitions: Vec<serde_json::Value> = Vec::with_capacity(device.partitions.len());
+            for p in &device.partitions {
+                let (size_bytes, _size_unit_hint) =
+                    resolve_partition_size_bytes(p, partition_size_overrides)?;
 
-                    // Use explicit offset if provided, otherwise use sequential cursor
-                    let offset_bytes = if let Some(offset) = p.offset {
-                        let unit = p.offset_unit.as_deref();
-                        to_bytes(offset as u64, unit)
-                    } else {
-                        cursor_bytes
-                    };
-                    part["offset"] = serde_json::json!(offset_bytes);
-                    part["offset_unit"] = serde_json::json!("bytes");
+                let mut part = serde_json::json!({});
+                if let Some(name) = &p.name {
+                    part["name"] = serde_json::json!(name);
+                }
+                // Bundle layout always emits the resolved concrete size in bytes
+                // so downstream provisioning never sees an absent or unit-mixed value.
+                part["size"] = serde_json::json!(size_bytes);
+                part["size_unit"] = serde_json::json!("bytes");
 
-                    // Advance cursor past this partition
-                    let size_bytes = to_bytes(p.size as u64, Some(&p.size_unit));
-                    cursor_bytes = offset_bytes + size_bytes;
+                // Use explicit offset if provided, otherwise use sequential cursor
+                let offset_bytes = if let Some(offset) = p.offset {
+                    let unit = p.offset_unit.as_deref();
+                    to_bytes(offset as u64, unit)
+                } else {
+                    cursor_bytes
+                };
+                part["offset"] = serde_json::json!(offset_bytes);
+                part["offset_unit"] = serde_json::json!("bytes");
 
-                    if let Some(expand) = &p.expand {
-                        part["expand"] = serde_json::json!(expand);
-                    }
-                    part
-                })
-                .collect();
+                // Advance cursor past this partition
+                cursor_bytes = offset_bytes + size_bytes;
+
+                if let Some(expand) = &p.expand {
+                    part["expand"] = serde_json::json!(expand);
+                }
+                partitions.push(part);
+            }
 
             bundle["layout"] = serde_json::json!({
                 "device": device.devpath,
@@ -725,22 +762,6 @@ fn generate_bundle_json(
     }
 
     Ok(bundle)
-}
-
-/// Convert a size value to bytes based on its unit.
-fn to_bytes(value: u64, unit: Option<&str>) -> u64 {
-    match unit {
-        Some("tebibytes") => value * 1024 * 1024 * 1024 * 1024,
-        Some("gibibytes") => value * 1024 * 1024 * 1024,
-        Some("mebibytes") => value * 1024 * 1024,
-        Some("kibibytes") => value * 1024,
-        Some("terabytes") => value * 1_000_000_000_000,
-        Some("gigabytes") => value * 1_000_000_000,
-        Some("megabytes") => value * 1_000_000,
-        Some("kilobytes") => value * 1_000,
-        Some("bytes") | None => value,
-        _ => value,
-    }
 }
 
 /// Package everything into a .aos tar.zst archive

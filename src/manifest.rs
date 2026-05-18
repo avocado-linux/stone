@@ -309,10 +309,83 @@ pub struct Partition {
     pub offset_redundant: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset_redundant_unit: Option<String>,
-    pub size: i64,
-    pub size_unit: String,
+    /// May be omitted only on the last partition when `expand: "true"`.
+    /// In that case the size is supplied at bundle/provision time via
+    /// `--partition-size <name>=<bytes>` and rounded up to size_alignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expand: Option<String>,
+    /// Alignment boundary applied to an externally-supplied size when `size`
+    /// is omitted. Defaults to 4 mebibytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_alignment: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_alignment_unit: Option<String>,
+}
+
+/// Convert a size value to bytes based on its unit. SI prefixes use 1000-base,
+/// IEC prefixes use 1024-base. Unknown units return the raw value.
+pub fn to_bytes(value: u64, unit: Option<&str>) -> u64 {
+    match unit {
+        Some("tebibytes") => value * 1024 * 1024 * 1024 * 1024,
+        Some("gibibytes") => value * 1024 * 1024 * 1024,
+        Some("mebibytes") => value * 1024 * 1024,
+        Some("kibibytes") => value * 1024,
+        Some("terabytes") => value * 1_000_000_000_000,
+        Some("gigabytes") => value * 1_000_000_000,
+        Some("megabytes") => value * 1_000_000,
+        Some("kilobytes") => value * 1_000,
+        Some("bytes") | None => value,
+        _ => value,
+    }
+}
+
+/// Round `value` up to the next multiple of `alignment`. Returns `value`
+/// unchanged when alignment is 0.
+pub fn align_up(value: u64, alignment: u64) -> u64 {
+    if alignment == 0 {
+        value
+    } else {
+        value.div_ceil(alignment) * alignment
+    }
+}
+
+/// Effective alignment (bytes) for a partition's externally-supplied size.
+/// Defaults to 4 MiB when `size_alignment` is unspecified.
+pub fn partition_alignment_bytes(p: &Partition) -> u64 {
+    let val = p.size_alignment.unwrap_or(4) as u64;
+    let unit = p.size_alignment_unit.as_deref().unwrap_or("mebibytes");
+    to_bytes(val, Some(unit))
+}
+
+/// Resolve a partition's size to bytes, consulting the external override map
+/// when the manifest omits `size`. Returns the byte size and a unit hint
+/// (`"bytes"` when the override path was taken).
+pub fn resolve_partition_size_bytes(
+    p: &Partition,
+    overrides: &HashMap<String, u64>,
+) -> Result<(u64, String), String> {
+    if let Some(size) = p.size {
+        let unit = p
+            .size_unit
+            .as_deref()
+            .ok_or_else(|| "partition has size but no size_unit".to_string())?;
+        return Ok((to_bytes(size as u64, Some(unit)), unit.to_string()));
+    }
+    let name = p
+        .name
+        .as_deref()
+        .ok_or_else(|| "partition omits size but has no name to match against overrides".to_string())?;
+    let raw = overrides.get(name).copied().ok_or_else(|| {
+        format!(
+            "partition '{name}' omits size; no --partition-size override was supplied"
+        )
+    })?;
+    let aligned = align_up(raw, partition_alignment_bytes(p));
+    Ok((aligned, "bytes".to_string()))
 }
 
 impl Manifest {
@@ -325,13 +398,68 @@ impl Manifest {
             )
         })?;
 
-        serde_json::from_str(&content).map_err(|e| {
+        let manifest: Self = serde_json::from_str(&content).map_err(|e| {
             format!(
                 "[ERROR] Failed to parse manifest JSON '{}': {}",
                 path.display(),
                 e
             )
-        })
+        })?;
+        manifest.validate_partitions().map_err(|e| {
+            format!(
+                "[ERROR] Manifest '{}' has invalid partition layout: {}",
+                path.display(),
+                e
+            )
+        })?;
+        Ok(manifest)
+    }
+
+    /// Enforce structural rules on partition lists that serde alone can't express:
+    /// - if `size` is omitted, the partition must be the last in its device and
+    ///   carry `expand: "true"`.
+    /// - `size` and `size_unit` must both be present or both be absent.
+    pub fn validate_partitions(&self) -> Result<(), String> {
+        for (dev_name, device) in &self.storage_devices {
+            let last_idx = device.partitions.len().saturating_sub(1);
+            for (idx, p) in device.partitions.iter().enumerate() {
+                let label = p
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("#{idx}"));
+                match (p.size.is_some(), p.size_unit.is_some()) {
+                    (true, false) => {
+                        return Err(format!(
+                            "device '{dev_name}' partition '{label}' has size but no size_unit",
+                        ));
+                    }
+                    (false, true) => {
+                        return Err(format!(
+                            "device '{dev_name}' partition '{label}' has size_unit but no size",
+                        ));
+                    }
+                    (false, false) => {
+                        if idx != last_idx {
+                            return Err(format!(
+                                "device '{dev_name}' partition '{label}' may only omit size if it is the last partition in the device's partition list"
+                            ));
+                        }
+                        if p.expand.as_deref() != Some("true") {
+                            return Err(format!(
+                                "device '{dev_name}' partition '{label}' may only omit size if it has expand=\"true\""
+                            ));
+                        }
+                        if p.name.is_none() {
+                            return Err(format!(
+                                "device '{dev_name}' partition at index {idx} omits size and has no name; a name is required so a --partition-size override can target it"
+                            ));
+                        }
+                    }
+                    (true, true) => {}
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Load a manifest from a base file, then deep-merge each overlay file
@@ -400,6 +528,14 @@ impl Manifest {
         let manifest: Self = serde_json::from_value(merged).map_err(|e| {
             format!(
                 "[ERROR] Merged manifest (base '{}' + {} overlay(s)) is invalid: {}",
+                base_path.display(),
+                overlay_paths.len(),
+                e
+            )
+        })?;
+        manifest.validate_partitions().map_err(|e| {
+            format!(
+                "[ERROR] Merged manifest (base '{}' + {} overlay(s)) has invalid partition layout: {}",
                 base_path.display(),
                 overlay_paths.len(),
                 e
@@ -767,8 +903,8 @@ mod tests {
             partition.offset_redundant_unit,
             Some("kibibytes".to_string())
         );
-        assert_eq!(partition.size, 128);
-        assert_eq!(partition.size_unit, "kibibytes");
+        assert_eq!(partition.size, Some(128));
+        assert_eq!(partition.size_unit, Some("kibibytes".to_string()));
     }
 
     #[test]
@@ -1262,9 +1398,9 @@ mod tests {
         let rootdisk = manifest.storage_devices.get("rootdisk").unwrap();
         assert_eq!(rootdisk.partitions.len(), 2);
         assert_eq!(rootdisk.partitions[0].name, Some("boot".to_string()));
-        assert_eq!(rootdisk.partitions[0].size, 128);
+        assert_eq!(rootdisk.partitions[0].size, Some(128));
         assert_eq!(rootdisk.partitions[1].name, Some("var".to_string()));
-        assert_eq!(rootdisk.partitions[1].size, 1024);
+        assert_eq!(rootdisk.partitions[1].size, Some(1024));
     }
 
     #[test]
@@ -1333,5 +1469,246 @@ mod tests {
 
         let (_, merged_json) = Manifest::load_and_merge(&base_path, &[]).unwrap();
         assert!(merged_json.is_none());
+    }
+
+    fn partition_with_size(size: Option<i64>, size_unit: Option<&str>, expand: Option<&str>, name: Option<&str>) -> Partition {
+        Partition {
+            name: name.map(String::from),
+            image: None,
+            partition_type: None,
+            partition_uuid: None,
+            offset: None,
+            offset_unit: None,
+            offset_redundant: None,
+            offset_redundant_unit: None,
+            size,
+            size_unit: size_unit.map(String::from),
+            expand: expand.map(String::from),
+            size_alignment: None,
+            size_alignment_unit: None,
+        }
+    }
+
+    fn manifest_with_partitions(partitions: Vec<Partition>) -> Manifest {
+        let mut storage_devices = HashMap::new();
+        storage_devices.insert(
+            "main".to_string(),
+            StorageDevice {
+                out: "disk.img".to_string(),
+                build_args: None,
+                devpath: "/dev/sda".to_string(),
+                block_size: None,
+                uuid: None,
+                images: HashMap::new(),
+                partitions,
+            },
+        );
+        Manifest {
+            runtime: Runtime {
+                platform: "linux".to_string(),
+                architecture: "x86_64".to_string(),
+                provision: None,
+                provision_default: None,
+                update_strategy: None,
+            },
+            storage_devices,
+            provision: None,
+            update: None,
+        }
+    }
+
+    #[test]
+    fn test_to_bytes_units() {
+        assert_eq!(to_bytes(5, Some("bytes")), 5);
+        assert_eq!(to_bytes(2, Some("kibibytes")), 2 * 1024);
+        assert_eq!(to_bytes(3, Some("mebibytes")), 3 * 1024 * 1024);
+        assert_eq!(to_bytes(4, Some("gibibytes")), 4u64 * 1024 * 1024 * 1024);
+        assert_eq!(to_bytes(2, Some("kilobytes")), 2_000);
+        assert_eq!(to_bytes(7, None), 7);
+        assert_eq!(to_bytes(9, Some("weird")), 9);
+    }
+
+    #[test]
+    fn test_align_up() {
+        assert_eq!(align_up(0, 4096), 0);
+        assert_eq!(align_up(1, 4096), 4096);
+        assert_eq!(align_up(4096, 4096), 4096);
+        assert_eq!(align_up(4097, 4096), 8192);
+        assert_eq!(align_up(100, 0), 100);
+    }
+
+    #[test]
+    fn test_partition_alignment_bytes_default_is_4_mib() {
+        let p = partition_with_size(None, None, Some("true"), Some("var"));
+        assert_eq!(partition_alignment_bytes(&p), 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_partition_alignment_bytes_explicit() {
+        let mut p = partition_with_size(None, None, Some("true"), Some("var"));
+        p.size_alignment = Some(16);
+        p.size_alignment_unit = Some("mebibytes".to_string());
+        assert_eq!(partition_alignment_bytes(&p), 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_resolve_partition_size_uses_explicit_size() {
+        let p = partition_with_size(Some(128), Some("mebibytes"), None, Some("rootfs"));
+        let overrides = HashMap::new();
+        let (bytes, unit) = resolve_partition_size_bytes(&p, &overrides).unwrap();
+        assert_eq!(bytes, 128 * 1024 * 1024);
+        assert_eq!(unit, "mebibytes");
+    }
+
+    #[test]
+    fn test_resolve_partition_size_uses_override_and_aligns() {
+        let p = partition_with_size(None, None, Some("true"), Some("var"));
+        // 100 MiB raw -> default 4 MiB alignment -> 100 MiB is already aligned
+        let mut overrides = HashMap::new();
+        overrides.insert("var".to_string(), 100 * 1024 * 1024);
+        let (bytes, unit) = resolve_partition_size_bytes(&p, &overrides).unwrap();
+        assert_eq!(bytes, 100 * 1024 * 1024);
+        assert_eq!(unit, "bytes");
+
+        // 100 MiB + 1 byte -> rounds up to next 4 MiB boundary = 104 MiB
+        let mut overrides2 = HashMap::new();
+        overrides2.insert("var".to_string(), 100 * 1024 * 1024 + 1);
+        let (bytes2, _) = resolve_partition_size_bytes(&p, &overrides2).unwrap();
+        assert_eq!(bytes2, 104 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_resolve_partition_size_custom_alignment() {
+        let mut p = partition_with_size(None, None, Some("true"), Some("var"));
+        p.size_alignment = Some(16);
+        p.size_alignment_unit = Some("mebibytes".to_string());
+        let mut overrides = HashMap::new();
+        // 100 MiB rounds up to next 16 MiB = 112 MiB
+        overrides.insert("var".to_string(), 100 * 1024 * 1024);
+        let (bytes, _) = resolve_partition_size_bytes(&p, &overrides).unwrap();
+        assert_eq!(bytes, 112 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_resolve_partition_size_missing_override_errors() {
+        let p = partition_with_size(None, None, Some("true"), Some("var"));
+        let overrides = HashMap::new();
+        let err = resolve_partition_size_bytes(&p, &overrides).unwrap_err();
+        assert!(err.contains("var"), "error should name the partition: {err}");
+        assert!(err.contains("--partition-size"));
+    }
+
+    #[test]
+    fn test_validate_partitions_explicit_sizes_ok() {
+        let m = manifest_with_partitions(vec![
+            partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
+            partition_with_size(Some(512), Some("mebibytes"), Some("true"), Some("var")),
+        ]);
+        assert!(m.validate_partitions().is_ok());
+    }
+
+    #[test]
+    fn test_validate_partitions_omitted_on_last_expand_ok() {
+        let m = manifest_with_partitions(vec![
+            partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
+            partition_with_size(None, None, Some("true"), Some("var")),
+        ]);
+        assert!(m.validate_partitions().is_ok(), "{:?}", m.validate_partitions());
+    }
+
+    #[test]
+    fn test_validate_partitions_omitted_on_non_last_fails() {
+        let m = manifest_with_partitions(vec![
+            partition_with_size(None, None, Some("true"), Some("first")),
+            partition_with_size(Some(256), Some("mebibytes"), None, Some("second")),
+        ]);
+        let err = m.validate_partitions().unwrap_err();
+        assert!(err.contains("first"), "{err}");
+        assert!(err.contains("last partition"));
+    }
+
+    #[test]
+    fn test_validate_partitions_omitted_without_expand_fails() {
+        let m = manifest_with_partitions(vec![
+            partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
+            partition_with_size(None, None, None, Some("var")),
+        ]);
+        let err = m.validate_partitions().unwrap_err();
+        assert!(err.contains("expand"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_partitions_half_specified_size_fails() {
+        let m_size_only = manifest_with_partitions(vec![Partition {
+            name: Some("boot".to_string()),
+            image: None,
+            partition_type: None,
+            partition_uuid: None,
+            offset: None,
+            offset_unit: None,
+            offset_redundant: None,
+            offset_redundant_unit: None,
+            size: Some(100),
+            size_unit: None,
+            expand: None,
+            size_alignment: None,
+            size_alignment_unit: None,
+        }]);
+        let err = m_size_only.validate_partitions().unwrap_err();
+        assert!(err.contains("size_unit"), "{err}");
+
+        let m_unit_only = manifest_with_partitions(vec![Partition {
+            name: Some("boot".to_string()),
+            image: None,
+            partition_type: None,
+            partition_uuid: None,
+            offset: None,
+            offset_unit: None,
+            offset_redundant: None,
+            offset_redundant_unit: None,
+            size: None,
+            size_unit: Some("mebibytes".to_string()),
+            expand: None,
+            size_alignment: None,
+            size_alignment_unit: None,
+        }]);
+        let err = m_unit_only.validate_partitions().unwrap_err();
+        assert!(err.contains("size_unit"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_partitions_omitted_without_name_fails() {
+        let m = manifest_with_partitions(vec![
+            partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
+            partition_with_size(None, None, Some("true"), None),
+        ]);
+        let err = m.validate_partitions().unwrap_err();
+        assert!(err.contains("name"), "{err}");
+    }
+
+    #[test]
+    fn test_parse_manifest_with_omitted_size_partition() {
+        let json = r#"{
+            "runtime": {"platform": "linux", "architecture": "x86_64"},
+            "storage_devices": {
+                "main": {
+                    "out": "disk.img",
+                    "devpath": "/dev/sda",
+                    "images": {},
+                    "partitions": [
+                        {"name": "boot", "size": 256, "size_unit": "mebibytes"},
+                        {"name": "var", "expand": "true"}
+                    ]
+                }
+            }
+        }"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        std::fs::write(&path, json).unwrap();
+        let m = Manifest::from_file(&path).expect("from_file should accept omitted size with expand=true on last partition");
+        let parts = &m.storage_devices["main"].partitions;
+        assert_eq!(parts.len(), 2);
+        assert!(parts[1].size.is_none());
+        assert!(parts[1].size_unit.is_none());
     }
 }

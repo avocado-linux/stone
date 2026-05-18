@@ -1,6 +1,9 @@
+use crate::commands::stone::bundle::parse_partition_size_overrides;
 use crate::fat;
 use crate::log::*;
-use crate::manifest::{BuildArgs, FatVariant, FileEntry, Image, Manifest};
+use crate::manifest::{
+    BuildArgs, FatVariant, FileEntry, Image, Manifest, resolve_partition_size_bytes,
+};
 use clap::Args;
 
 use std::collections::HashMap;
@@ -27,11 +30,18 @@ pub struct ProvisionArgs {
     /// Enable verbose output
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
+
+    /// Override a partition's size in bytes by name (repeatable, e.g.
+    /// `--partition-size var=536870912`). Used when the manifest omits `size`
+    /// for the last `expand: "true"` partition.
+    #[arg(long = "partition-size", value_name = "NAME=BYTES")]
+    pub partition_sizes: Vec<String>,
 }
 
 impl ProvisionArgs {
     pub fn execute(&self) -> Result<(), String> {
-        provision_command(&self.input_dirs, &self.overlays, self.verbose)
+        let overrides = parse_partition_size_overrides(&self.partition_sizes)?;
+        provision_command(&self.input_dirs, &self.overlays, self.verbose, &overrides)
     }
 }
 
@@ -50,6 +60,7 @@ pub fn provision_command(
     input_dirs: &[PathBuf],
     overlay_paths: &[PathBuf],
     verbose: bool,
+    partition_size_overrides: &HashMap<String, u64>,
 ) -> Result<(), String> {
     // Find manifest.json in the input directories
     let manifest_path = find_file_in_dirs("manifest.json", input_dirs).ok_or_else(|| {
@@ -116,6 +127,7 @@ pub fn provision_command(
                 input_dirs,
                 &build_dir,
                 verbose,
+                partition_size_overrides,
             )?;
         }
     }
@@ -127,6 +139,7 @@ pub fn provision_command(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_storage_device(
     device_name: &str,
     device: &crate::manifest::StorageDevice,
@@ -135,6 +148,7 @@ fn build_storage_device(
     input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
+    partition_size_overrides: &HashMap<String, u64>,
 ) -> Result<(), String> {
     match build_args {
         BuildArgs::Fwup { template } => {
@@ -150,6 +164,7 @@ fn build_storage_device(
                 input_dirs,
                 build_dir,
                 verbose,
+                partition_size_overrides,
             )?;
         }
         BuildArgs::Fat { .. } => {
@@ -407,6 +422,7 @@ fn create_fat_manifest_with_resolved_paths(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_fwup_with_env_vars(
     device_name: &str,
     device: &crate::manifest::StorageDevice,
@@ -415,14 +431,21 @@ fn build_fwup_with_env_vars(
     input_dirs: &[PathBuf],
     build_dir: &Path,
     verbose: bool,
+    partition_size_overrides: &HashMap<String, u64>,
 ) -> Result<(), String> {
     let template_path = find_file_in_dirs(template, input_dirs)
         .ok_or_else(|| format!("fwup template '{template}' not found in any input directory"))?;
     let output_path = build_dir.join(&device.out);
 
     // Calculate environment variables from manifest
-    let env_vars =
-        calculate_avocado_env_vars(device_name, device, manifest, input_dirs, build_dir)?;
+    let env_vars = calculate_avocado_env_vars(
+        device_name,
+        device,
+        manifest,
+        input_dirs,
+        build_dir,
+        partition_size_overrides,
+    )?;
 
     let mut cmd = Command::new("fwup");
     cmd.arg("-c")
@@ -489,6 +512,7 @@ fn calculate_avocado_env_vars(
     manifest: &Manifest,
     input_dirs: &[PathBuf],
     build_dir: &Path,
+    partition_size_overrides: &HashMap<String, u64>,
 ) -> Result<HashMap<String, String>, String> {
     let mut env_vars = HashMap::new();
 
@@ -579,7 +603,17 @@ fn calculate_avocado_env_vars(
             current_offset
         };
 
-        let partition_size = convert_to_blocks(partition.size, &partition.size_unit, block_size)?;
+        let partition_size = if partition.size.is_some() {
+            convert_to_blocks(
+                partition.size.unwrap(),
+                partition.size_unit.as_deref().unwrap(),
+                block_size,
+            )?
+        } else {
+            let (bytes, _) =
+                resolve_partition_size_bytes(partition, partition_size_overrides)?;
+            bytes / (block_size as u64)
+        };
 
         // Set partition variables based on the partition name
         if let Some(partition_name) = &partition.name {

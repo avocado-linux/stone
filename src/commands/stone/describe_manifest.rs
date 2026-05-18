@@ -195,7 +195,10 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
 
         for (idx, partition) in device.partitions.iter().enumerate() {
             let offset = format_offset_display(partition.offset, partition.offset_unit.as_ref())?;
-            let size = format_size(partition.size, &partition.size_unit)?;
+            let size = match (partition.size, partition.size_unit.as_deref()) {
+                (Some(s), Some(u)) => format_size(s, u)?,
+                _ => "<auto>".to_string(),
+            };
             let special = if partition.expand == Some("true".to_string()) {
                 "expandable"
             } else {
