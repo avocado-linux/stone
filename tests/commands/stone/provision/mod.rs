@@ -1481,3 +1481,115 @@ VENDOR_NAME="Avocado Linux""#;
         "Stale artifacts from previous provision runs should be cleaned"
     );
 }
+
+#[test]
+fn test_provision_resolves_omitted_expand_partition_size() {
+    // Regression: under stone's manifest contract the trailing `expand: "true"`
+    // partition (e.g. `var`) may omit `size`. The per-target provision scripts
+    // read sizes straight from the manifest and abort on a null unit
+    // ("Unknown size unit: null"). `stone provision` must therefore hand the
+    // script a manifest whose every partition carries a concrete size in a unit
+    // the scripts understand (mebibytes).
+    let temp_dir = TempDir::new().unwrap();
+    let input_path = temp_dir.path();
+
+    // A 5 MiB var image: align_up(5 MiB, default 4 MiB) = 8 MiB.
+    let five_mib = 5 * 1024 * 1024;
+    fs::write(input_path.join("var.btrfs"), vec![0u8; five_mib]).unwrap();
+    fs::write(input_path.join("rootfs.img"), b"rootfs").unwrap();
+
+    let os_release_content = r#"NAME="Avocado Linux"
+VERSION="1.0.0"
+ID=avocado
+VERSION_ID="1.0.0"
+VERSION_CODENAME=test
+PRETTY_NAME="Avocado Linux 1.0.0"
+VENDOR_NAME="Avocado Linux""#;
+    fs::write(input_path.join("os-release"), os_release_content).unwrap();
+
+    // `var` is the trailing expand partition and omits its size.
+    let manifest_content = r#"{
+        "runtime": {
+            "platform": "test-platform",
+            "architecture": "noarch",
+            "provision_default": "usb"
+        },
+        "provision": {
+            "profiles": {
+                "usb": { "script": "capture.sh" }
+            }
+        },
+        "storage_devices": {
+            "rootdisk": {
+                "out": "disk.img",
+                "devpath": "/dev/test",
+                "images": {
+                    "rootfs": "rootfs.img",
+                    "var": "var.btrfs"
+                },
+                "partitions": [
+                    {
+                        "name": "rootfs",
+                        "image": "rootfs",
+                        "partition_type": "8304",
+                        "size": 512,
+                        "size_unit": "mebibytes"
+                    },
+                    {
+                        "name": "var",
+                        "image": "var",
+                        "partition_type": "8300",
+                        "expand": "true"
+                    }
+                ]
+            }
+        }
+    }"#;
+    fs::write(input_path.join("manifest.json"), manifest_content).unwrap();
+
+    // Capture the manifest the script is actually handed (avoids a jq dependency).
+    let capture_script = r#"#!/bin/bash
+cp "$AVOCADO_STONE_MANIFEST" captured-manifest.json
+"#;
+    fs::write(input_path.join("capture.sh"), capture_script).unwrap();
+    fs::set_permissions(
+        input_path.join("capture.sh"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "provision",
+            "--input-dir",
+            &input_path.to_string_lossy(),
+            "--verbose",
+        ])
+        .assert()
+        .success();
+
+    // The script must have received concrete size + unit, never a null unit.
+    let captured = fs::read_to_string(input_path.join("captured-manifest.json"))
+        .expect("provision script should have captured the manifest it received");
+    let doc: serde_json::Value = serde_json::from_str(&captured).unwrap();
+    let var = &doc["storage_devices"]["rootdisk"]["partitions"][1];
+
+    assert_eq!(var["name"], "var", "partition index 1 should be var");
+    assert_eq!(
+        var["size_unit"], "mebibytes",
+        "resolved size_unit must be a unit the provision scripts parse, got {:?}",
+        var["size_unit"]
+    );
+    // 5 MiB image aligned up to the default 4 MiB boundary = 8 MiB.
+    assert_eq!(
+        var["size"], 8,
+        "var size should be the image size aligned up to size_alignment, got {:?}",
+        var["size"]
+    );
+
+    // The unmodified partition is untouched.
+    let rootfs = &doc["storage_devices"]["rootdisk"]["partitions"][0];
+    assert_eq!(rootfs["size"], 512);
+    assert_eq!(rootfs["size_unit"], "mebibytes");
+}

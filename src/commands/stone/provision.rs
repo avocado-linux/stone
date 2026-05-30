@@ -132,8 +132,26 @@ pub fn provision_command(
         }
     }
 
+    // Resolve any partition that omits `size` (the trailing `expand: "true"`
+    // partition under stone's manifest contract) into a concrete, mebibyte size
+    // so the per-target provision scripts — which read sizes straight from the
+    // manifest — never encounter a null unit.
+    let script_manifest_path = resolve_manifest_for_provision(
+        &manifest,
+        &manifest_path,
+        input_dirs,
+        partition_size_overrides,
+        verbose,
+    )?;
+
     // Execute provision script using profile-based approach
-    execute_provision_with_profile(&manifest, &manifest_path, input_dirs, &build_dir, verbose)?;
+    execute_provision_with_profile(
+        &manifest,
+        &script_manifest_path,
+        input_dirs,
+        &build_dir,
+        verbose,
+    )?;
 
     log_success("Provision completed.");
     Ok(())
@@ -603,15 +621,10 @@ fn calculate_avocado_env_vars(
             current_offset
         };
 
-        let partition_size = if partition.size.is_some() {
-            convert_to_blocks(
-                partition.size.unwrap(),
-                partition.size_unit.as_deref().unwrap(),
-                block_size,
-            )?
+        let partition_size = if let Some(size) = partition.size {
+            convert_to_blocks(size, partition.size_unit.as_deref().unwrap(), block_size)?
         } else {
-            let (bytes, _) =
-                resolve_partition_size_bytes(partition, partition_size_overrides)?;
+            let (bytes, _) = resolve_partition_size_bytes(partition, partition_size_overrides)?;
             bytes / (block_size as u64)
         };
 
@@ -736,6 +749,133 @@ fn read_os_release_info(
     let author = vendor_name.unwrap_or_else(String::new);
 
     Ok((version, codename, description, author))
+}
+
+/// Ensure every partition handed to the provision script carries a concrete
+/// `size`/`size_unit`.
+///
+/// Under stone's manifest contract the trailing `expand: "true"` partition may
+/// omit `size` (it is otherwise supplied via `--partition-size` at bundle
+/// time). The per-target provision scripts, however, read sizes directly from
+/// the manifest and abort on a null unit. For each size-less partition this
+/// resolves a concrete byte size — preferring an explicit `--partition-size`
+/// override, otherwise the on-disk size of the partition's image — reusing
+/// [`resolve_partition_size_bytes`] so the rule stays identical to the bundle
+/// path. The result is emitted in `mebibytes`, the unit every provision script
+/// already understands, so no script needs to change.
+///
+/// Returns a sibling resolved-manifest path when any partition was rewritten,
+/// or the original path when nothing needed resolving. Rewrites are applied to
+/// the raw manifest JSON so fields stone does not model (e.g. `provision.fields`)
+/// round-trip verbatim.
+fn resolve_manifest_for_provision(
+    manifest: &Manifest,
+    manifest_path: &Path,
+    input_dirs: &[PathBuf],
+    overrides: &HashMap<String, u64>,
+    verbose: bool,
+) -> Result<PathBuf, String> {
+    const MIB: u64 = 1024 * 1024;
+
+    // (device, partition index, resolved size in MiB) for each size-less partition.
+    let mut rewrites: Vec<(String, usize, u64)> = Vec::new();
+    for (device_name, device) in &manifest.storage_devices {
+        for (idx, part) in device.partitions.iter().enumerate() {
+            if part.size.is_some() {
+                continue;
+            }
+
+            let name = part.name.as_deref().ok_or_else(|| {
+                format!(
+                    "Storage device '{device_name}' partition #{} omits both 'size' and 'name'.",
+                    idx + 1
+                )
+            })?;
+
+            // Prefer an explicit override; otherwise derive from the image file.
+            let mut effective = overrides.clone();
+            if !effective.contains_key(name) {
+                let image_key = part.image.as_deref().ok_or_else(|| {
+                    format!(
+                        "Partition '{name}' omits 'size' and has no 'image' to derive it from. \
+                         Pass --partition-size {name}=<bytes>."
+                    )
+                })?;
+                let image = device.images.get(image_key).ok_or_else(|| {
+                    format!("Partition '{name}' references unknown image '{image_key}'.")
+                })?;
+                let image_file = find_file_in_dirs(image.out(), input_dirs).ok_or_else(|| {
+                    format!(
+                        "Cannot size partition '{name}': image '{}' not found in any input directory.",
+                        image.out()
+                    )
+                })?;
+                let bytes = fs::metadata(&image_file)
+                    .map_err(|e| format!("Failed to stat image '{}': {e}", image_file.display()))?
+                    .len();
+                effective.insert(name.to_string(), bytes);
+            }
+
+            let (bytes, _unit) = resolve_partition_size_bytes(part, &effective)?;
+            rewrites.push((device_name.clone(), idx, bytes.div_ceil(MIB)));
+        }
+    }
+
+    if rewrites.is_empty() {
+        return Ok(manifest_path.to_path_buf());
+    }
+
+    // Apply rewrites to the raw JSON so unmodeled fields round-trip verbatim.
+    let raw = fs::read_to_string(manifest_path)
+        .map_err(|e| format!("Failed to read manifest '{}': {e}", manifest_path.display()))?;
+    let mut doc: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "Failed to parse manifest '{}': {e}",
+            manifest_path.display()
+        )
+    })?;
+
+    for (device_name, idx, size_mib) in &rewrites {
+        let part = doc
+            .get_mut("storage_devices")
+            .and_then(|v| v.get_mut(device_name))
+            .and_then(|v| v.get_mut("partitions"))
+            .and_then(|v| v.get_mut(*idx))
+            .and_then(|v| v.as_object_mut())
+            .ok_or_else(|| {
+                format!(
+                    "Failed to locate storage_devices.{device_name}.partitions[{idx}] in manifest JSON."
+                )
+            })?;
+        part.insert("size".to_string(), serde_json::Value::from(*size_mib));
+        part.insert(
+            "size_unit".to_string(),
+            serde_json::Value::from("mebibytes"),
+        );
+        if verbose {
+            log_info(&format!(
+                "Resolved size for '{device_name}' partition #{}: {size_mib} MiB.",
+                idx + 1
+            ));
+        }
+    }
+
+    let resolved_path = manifest_path.with_file_name(".manifest.resolved.json");
+    let serialized = serde_json::to_string_pretty(&doc)
+        .map_err(|e| format!("Failed to serialize resolved manifest: {e}"))?;
+    fs::write(&resolved_path, &serialized).map_err(|e| {
+        format!(
+            "Failed to write resolved manifest '{}': {e}",
+            resolved_path.display()
+        )
+    })?;
+
+    log_info(&format!(
+        "Wrote resolved provision manifest to '{}'.",
+        resolved_path.display()
+    ));
+
+    Ok(resolved_path)
 }
 
 fn execute_provision_with_profile(
