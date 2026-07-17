@@ -2,7 +2,8 @@ use crate::commands::stone::bundle::parse_partition_size_overrides;
 use crate::fat;
 use crate::log::*;
 use crate::manifest::{
-    BuildArgs, FatVariant, FileEntry, Image, Manifest, resolve_partition_size_bytes,
+    BuildArgs, FatVariant, FileEntry, Image, Manifest, merge_fat_files,
+    resolve_partition_size_bytes,
 };
 use clap::Args;
 
@@ -204,17 +205,24 @@ fn build_image(
             size_unit,
             ..
         } => match build_args {
-            BuildArgs::Fat { variant, files } => build_fat_image(FatImageParams {
-                image_name,
-                out,
+            BuildArgs::Fat {
                 variant,
                 files,
-                size,
-                size_unit,
-                input_dirs,
-                build_dir,
-                verbose,
-            }),
+                files_append,
+            } => {
+                let merged_files = merge_fat_files(files, files_append)?;
+                build_fat_image(FatImageParams {
+                    image_name,
+                    out,
+                    variant,
+                    files: &merged_files,
+                    size,
+                    size_unit,
+                    input_dirs,
+                    build_dir,
+                    verbose,
+                })
+            }
             BuildArgs::Fwup { template } => {
                 build_fwup_image(image_name, image, template, input_dirs, build_dir, verbose)
             }
@@ -604,14 +612,9 @@ fn calculate_avocado_env_vars(
         };
 
         let partition_size = if let Some(size) = partition.size {
-            convert_to_blocks(
-                size,
-                partition.size_unit.as_deref().unwrap(),
-                block_size,
-            )?
+            convert_to_blocks(size, partition.size_unit.as_deref().unwrap(), block_size)?
         } else {
-            let (bytes, _) =
-                resolve_partition_size_bytes(partition, partition_size_overrides)?;
+            let (bytes, _) = resolve_partition_size_bytes(partition, partition_size_overrides)?;
             bytes / (block_size as u64)
         };
 

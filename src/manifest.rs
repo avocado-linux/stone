@@ -20,6 +20,11 @@ pub enum BuildArgs {
         variant: FatVariant,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files: Vec<FileEntry>,
+        /// Additional FAT files merged onto `files` at bundle time, deduplicated
+        /// by output path. Lets a delivery hook append a custom entry (e.g. a
+        /// device-tree overlay) without restating the base `files` list.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files_append: Vec<FileEntry>,
     },
     #[serde(rename = "fwup")]
     Fwup {
@@ -46,6 +51,14 @@ impl BuildArgs {
     pub fn fat_files(&self) -> &[FileEntry] {
         match self {
             BuildArgs::Fat { files, .. } => files,
+            _ => &[],
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn fat_files_append(&self) -> &[FileEntry] {
+        match self {
+            BuildArgs::Fat { files_append, .. } => files_append,
             _ => &[],
         }
     }
@@ -270,7 +283,7 @@ impl Image {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FileEntry {
     String(String),
@@ -287,6 +300,16 @@ impl FileEntry {
         match self {
             FileEntry::String(filename) => filename,
             FileEntry::Object { input, .. } => input,
+        }
+    }
+
+    /// Output path this entry produces on the target filesystem. A bare
+    /// `String` entry outputs under its own name; an `Object` outputs under
+    /// its explicit `out`.
+    pub fn output_name(&self) -> &str {
+        match self {
+            FileEntry::String(filename) => filename,
+            FileEntry::Object { output, .. } => output,
         }
     }
 }
@@ -375,14 +398,11 @@ pub fn resolve_partition_size_bytes(
             .ok_or_else(|| "partition has size but no size_unit".to_string())?;
         return Ok((to_bytes(size as u64, Some(unit)), unit.to_string()));
     }
-    let name = p
-        .name
-        .as_deref()
-        .ok_or_else(|| "partition omits size but has no name to match against overrides".to_string())?;
+    let name = p.name.as_deref().ok_or_else(|| {
+        "partition omits size but has no name to match against overrides".to_string()
+    })?;
     let raw = overrides.get(name).copied().ok_or_else(|| {
-        format!(
-            "partition '{name}' omits size; no --partition-size override was supplied"
-        )
+        format!("partition '{name}' omits size; no --partition-size override was supplied")
     })?;
     let aligned = align_up(raw, partition_alignment_bytes(p));
     Ok((aligned, "bytes".to_string()))
@@ -423,10 +443,7 @@ impl Manifest {
         for (dev_name, device) in &self.storage_devices {
             let last_idx = device.partitions.len().saturating_sub(1);
             for (idx, p) in device.partitions.iter().enumerate() {
-                let label = p
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("#{idx}"));
+                let label = p.name.clone().unwrap_or_else(|| format!("#{idx}"));
                 match (p.size.is_some(), p.size_unit.is_some()) {
                     (true, false) => {
                         return Err(format!(
@@ -691,6 +708,37 @@ pub fn deep_merge_json(base: &mut Value, overlay: Value) {
     }
 }
 
+/// Merge a base FAT `files` list with an additive `files_append` list, keyed by
+/// output path. An entry whose `{in,out}` is identical to one already present
+/// collapses to a single entry, so a regenerative delivery hook that re-emits
+/// the same entry on every rebuild is an idempotent no-op. Two entries that
+/// share an output path but resolve from different inputs are a hard error: a
+/// silent overwrite of a boot file (e.g. `overlays/foo.dtbo`) could brick the
+/// device, so the conflict must surface at build time.
+pub fn merge_fat_files(base: &[FileEntry], append: &[FileEntry]) -> Result<Vec<FileEntry>, String> {
+    let mut merged: Vec<FileEntry> = Vec::new();
+    for entry in base.iter().chain(append.iter()) {
+        if let Some(existing) = merged
+            .iter()
+            .find(|e| e.output_name() == entry.output_name())
+        {
+            if existing.input_filename() != entry.input_filename() {
+                return Err(format!(
+                    "[ERROR] Conflicting FAT file entries for output '{}': inputs '{}' and '{}' differ. \
+A custom overlay must not overwrite an existing boot file; give it a distinct output name.",
+                    entry.output_name(),
+                    existing.input_filename(),
+                    entry.input_filename(),
+                ));
+            }
+            // Identical {in,out}: idempotent, already present.
+            continue;
+        }
+        merged.push(entry.clone());
+    }
+    Ok(merged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,6 +748,7 @@ mod tests {
         let fat_args = BuildArgs::Fat {
             variant: FatVariant::Fat32,
             files: vec![],
+            files_append: vec![],
         };
 
         let serialized = serde_json::to_value(&fat_args).unwrap();
@@ -725,6 +774,7 @@ mod tests {
         let fat_args = BuildArgs::Fat {
             variant: FatVariant::Fat16,
             files: vec![],
+            files_append: vec![],
         };
         assert_eq!(fat_args.build_type(), "fat");
 
@@ -741,6 +791,7 @@ mod tests {
             build_args: Some(BuildArgs::Fat {
                 variant: FatVariant::Fat32,
                 files: vec![],
+                files_append: vec![],
             }),
             size: 100,
             size_unit: "megabytes".to_string(),
@@ -827,6 +878,7 @@ mod tests {
                     output: "dest.bin".to_string(),
                 },
             ],
+            files_append: vec![],
         };
 
         assert_eq!(fat_args.build_type(), "fat");
@@ -1471,7 +1523,12 @@ mod tests {
         assert!(merged_json.is_none());
     }
 
-    fn partition_with_size(size: Option<i64>, size_unit: Option<&str>, expand: Option<&str>, name: Option<&str>) -> Partition {
+    fn partition_with_size(
+        size: Option<i64>,
+        size_unit: Option<&str>,
+        expand: Option<&str>,
+        name: Option<&str>,
+    ) -> Partition {
         Partition {
             name: name.map(String::from),
             image: None,
@@ -1594,7 +1651,10 @@ mod tests {
         let p = partition_with_size(None, None, Some("true"), Some("var"));
         let overrides = HashMap::new();
         let err = resolve_partition_size_bytes(&p, &overrides).unwrap_err();
-        assert!(err.contains("var"), "error should name the partition: {err}");
+        assert!(
+            err.contains("var"),
+            "error should name the partition: {err}"
+        );
         assert!(err.contains("--partition-size"));
     }
 
@@ -1613,7 +1673,11 @@ mod tests {
             partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
             partition_with_size(None, None, Some("true"), Some("var")),
         ]);
-        assert!(m.validate_partitions().is_ok(), "{:?}", m.validate_partitions());
+        assert!(
+            m.validate_partitions().is_ok(),
+            "{:?}",
+            m.validate_partitions()
+        );
     }
 
     #[test]
@@ -1705,10 +1769,98 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m.json");
         std::fs::write(&path, json).unwrap();
-        let m = Manifest::from_file(&path).expect("from_file should accept omitted size with expand=true on last partition");
+        let m = Manifest::from_file(&path)
+            .expect("from_file should accept omitted size with expand=true on last partition");
         let parts = &m.storage_devices["main"].partitions;
         assert_eq!(parts.len(), 2);
         assert!(parts[1].size.is_none());
         assert!(parts[1].size_unit.is_none());
+    }
+
+    // --- merge_fat_files (files_append) tests ---
+
+    fn fe_obj(input: &str, output: &str) -> FileEntry {
+        FileEntry::Object {
+            input: input.to_string(),
+            output: output.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_file_entry_output_name_string_and_object() {
+        // A bare String entry outputs under its own name (in == out).
+        assert_eq!(
+            FileEntry::String("a.dtbo".to_string()).output_name(),
+            "a.dtbo"
+        );
+        // An Object entry outputs under its explicit `out`.
+        assert_eq!(
+            fe_obj("a.dtbo", "overlays/a.dtbo").output_name(),
+            "overlays/a.dtbo"
+        );
+    }
+
+    #[test]
+    fn test_merge_fat_files_appends_new_entry() {
+        let base = vec![fe_obj("config.txt", "config.txt")];
+        let append = vec![fe_obj("bbproto.dtbo", "overlays/bbproto.dtbo")];
+        let merged = merge_fat_files(&base, &append).unwrap();
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].output_name(), "config.txt");
+        assert_eq!(merged[1].output_name(), "overlays/bbproto.dtbo");
+    }
+
+    #[test]
+    fn test_merge_fat_files_identical_entry_collapses() {
+        // A regenerative hook re-emits the same {in,out} on every rebuild; that
+        // must be an idempotent no-op, not a hard error (Fable C2).
+        let base = vec![fe_obj("bbproto.dtbo", "overlays/bbproto.dtbo")];
+        let append = vec![fe_obj("bbproto.dtbo", "overlays/bbproto.dtbo")];
+        let merged = merge_fat_files(&base, &append).unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].output_name(), "overlays/bbproto.dtbo");
+    }
+
+    #[test]
+    fn test_merge_fat_files_same_out_different_in_errors() {
+        // Same output path, different source = a real conflict (would silently
+        // overwrite a boot-critical file). Hard error (Fable C2 / Risk #5).
+        let base = vec![fe_obj("vc4-kms-v3d-pi5.dtbo", "overlays/foo.dtbo")];
+        let append = vec![fe_obj("user.dtbo", "overlays/foo.dtbo")];
+        let err = merge_fat_files(&base, &append).unwrap_err();
+        assert!(
+            err.contains("overlays/foo.dtbo"),
+            "error should name the colliding out: {err}"
+        );
+    }
+
+    #[test]
+    fn test_merge_fat_files_string_object_same_out_collapses() {
+        // String("f") and Object{in:"f", out:"f"} describe the same delivery.
+        let base = vec![FileEntry::String("f".to_string())];
+        let append = vec![fe_obj("f", "f")];
+        let merged = merge_fat_files(&base, &append).unwrap();
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn test_fat_build_args_parses_files_append() {
+        let json = r#"{"type":"fat","variant":"FAT32","files":[{"in":"config.txt","out":"config.txt"}],"files_append":[{"in":"bbproto.dtbo","out":"overlays/bbproto.dtbo"}]}"#;
+        let args: BuildArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.fat_files().len(), 1);
+        assert_eq!(args.fat_files_append().len(), 1);
+        assert_eq!(
+            args.fat_files_append()[0].output_name(),
+            "overlays/bbproto.dtbo"
+        );
+    }
+
+    #[test]
+    fn test_fat_build_args_files_append_defaults_empty() {
+        // A manifest without files_append still parses (backward compatible).
+        let json =
+            r#"{"type":"fat","variant":"FAT32","files":[{"in":"config.txt","out":"config.txt"}]}"#;
+        let args: BuildArgs = serde_json::from_str(json).unwrap();
+        assert!(args.fat_files_append().is_empty());
     }
 }
