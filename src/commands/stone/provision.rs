@@ -603,9 +603,9 @@ fn calculate_avocado_env_vars(
             current_offset
         };
 
-        let partition_size = if partition.size.is_some() {
+        let partition_size = if let Some(size) = partition.size {
             convert_to_blocks(
-                partition.size.unwrap(),
+                size,
                 partition.size_unit.as_deref().unwrap(),
                 block_size,
             )?
