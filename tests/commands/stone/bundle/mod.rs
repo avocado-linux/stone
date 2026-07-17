@@ -134,8 +134,7 @@ fn test_bundle_missing_partition_size_override_errors() {
         .assert()
         .failure()
         .stdout(
-            predicates::str::contains("var")
-                .and(predicates::str::contains("--partition-size")),
+            predicates::str::contains("var").and(predicates::str::contains("--partition-size")),
         );
 }
 

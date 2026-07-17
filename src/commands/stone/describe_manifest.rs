@@ -144,10 +144,20 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
                     output.push_str("    Build Args:\n");
                     output.push_str(&format!("      type: {}\n", build_args.build_type()));
                     match build_args {
-                        crate::manifest::BuildArgs::Fat { variant, files } => {
+                        crate::manifest::BuildArgs::Fat {
+                            variant,
+                            files,
+                            files_append,
+                        } => {
                             output.push_str(&format!("      variant: {variant:?}\n"));
                             if !files.is_empty() {
                                 output.push_str(&format!("      files: {} file(s)\n", files.len()));
+                            }
+                            if !files_append.is_empty() {
+                                output.push_str(&format!(
+                                    "      files_append: {} file(s)\n",
+                                    files_append.len()
+                                ));
                             }
                         }
                         crate::manifest::BuildArgs::Fwup { template } => {
@@ -221,10 +231,18 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
             output.push_str("\nStorage Device Build Args:\n");
             output.push_str(&format!("  type: {}\n", build_args.build_type()));
             match build_args {
-                crate::manifest::BuildArgs::Fat { variant, files } => {
+                crate::manifest::BuildArgs::Fat {
+                    variant,
+                    files,
+                    files_append,
+                } => {
                     output.push_str(&format!("  variant: {variant:?}\n"));
                     if !files.is_empty() {
                         output.push_str(&format!("  files: {} file(s)\n", files.len()));
+                    }
+                    if !files_append.is_empty() {
+                        output
+                            .push_str(&format!("  files_append: {} file(s)\n", files_append.len()));
                     }
                 }
                 crate::manifest::BuildArgs::Fwup { template } => {
