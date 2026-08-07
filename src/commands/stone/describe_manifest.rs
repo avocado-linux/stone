@@ -167,19 +167,16 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
                 }
             }
 
-            // Show files from build_args for fat builds, otherwise from image
-            let files = if let Some(build_args) = image.build_args() {
-                match build_args {
-                    crate::manifest::BuildArgs::Fat { files, .. } => files.as_slice(),
-                    _ => image.files(),
-                }
-            } else {
-                image.files()
-            };
+            // Base files plus appended ones. A misplaced or misspelled
+            // files_append key is silently ignored, so this listing is the
+            // operator's only confirmation an append landed - and it used to
+            // print a count that included appended entries above a list that
+            // named none of them.
+            let files = image.all_files()?;
 
             if !files.is_empty() {
                 output.push_str(&format!("    Files ({}):\n", files.len()));
-                for file_entry in files {
+                for file_entry in &files {
                     match file_entry {
                         crate::manifest::FileEntry::String(filename) => {
                             output.push_str(&format!("      {filename}\n"));

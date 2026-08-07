@@ -175,17 +175,17 @@ pub fn validate_command(
                 }
             }
 
-            // Process files from build_args for fat builds, otherwise from image
-            let files = if let Some(build_args) = image.build_args() {
-                match build_args {
-                    crate::manifest::BuildArgs::Fat { files, .. } => files.as_slice(),
-                    _ => image.files(),
-                }
-            } else {
-                image.files()
-            };
+            // The merged list, so validate checks appended sources exist and
+            // runs the collision guard. Validating only base `files` let a
+            // manifest print "Validated." and then hard-fail at bundle time,
+            // which is the one outcome a pre-build check must not produce.
+            // A collision aborts rather than joining the missing-file tally:
+            // those are "this input is absent", which the report below counts
+            // and lists, while this is "these two entries cannot both exist".
+            // Folding it into that count would misreport it as a missing file.
+            let files = image.all_files()?;
 
-            for file_entry in files {
+            for file_entry in &files {
                 if find_file_in_dirs(file_entry.input_filename(), input_dirs).is_none() {
                     missing_files.push((
                         device_name.clone(),
