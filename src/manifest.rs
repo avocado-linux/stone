@@ -254,6 +254,26 @@ impl Image {
         }
     }
 
+    /// Every FAT file this image contributes: base `files` with `files_append`
+    /// merged in, deduplicated by output path.
+    ///
+    /// [`Image::files`] returns only the base list, which is what left the
+    /// feature half-wired: each consumer that stages source files copied base
+    /// inputs and skipped appended ones, so `bundle` produced an `.aos` naming
+    /// a file it had not staged and `provision` failed a command later. Anything
+    /// that needs the files this image will actually contain wants this, not
+    /// `files()`.
+    ///
+    /// Returns the conflict error from [`merge_fat_files`] rather than
+    /// swallowing it, so a colliding append fails at the caller instead of
+    /// silently losing one of the two entries.
+    pub fn all_files(&self) -> Result<Vec<FileEntry>, String> {
+        match self.build_args() {
+            Some(args) => merge_fat_files(args.fat_files(), args.fat_files_append()),
+            None => Ok(self.files().to_vec()),
+        }
+    }
+
     pub fn size(&self) -> Option<i64> {
         match self {
             Image::String(_) => None,
@@ -671,12 +691,39 @@ impl Provision {
 /// win on conflict). Arrays of named objects (elements with a `"name"` string
 /// field) are merged by matching names. All other values (scalars, unnamed
 /// arrays) in `overlay` replace `base` entirely.
+/// Concatenate `overlay` onto `base` when both are arrays, rather than
+/// replacing. Falls back to replacement for any other shape, matching
+/// [`deep_merge_json`]'s behaviour on a type mismatch.
+fn concat_json_array(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Array(base_arr), Value::Array(overlay_arr)) => base_arr.extend(overlay_arr),
+        (base, overlay) => *base = overlay,
+    }
+}
+
 pub fn deep_merge_json(base: &mut Value, overlay: Value) {
     match (base, overlay) {
         (Value::Object(base_map), Value::Object(overlay_map)) => {
             for (key, overlay_val) in overlay_map {
+                let is_append_list = key == "files_append";
                 let entry = base_map.entry(key).or_insert(Value::Null);
-                deep_merge_json(entry, overlay_val);
+                if is_append_list {
+                    // `files_append` is additive by definition - its purpose is
+                    // letting independent delivery hooks each contribute an
+                    // entry without restating the others. The generic array rule
+                    // below replaces the list unless every element carries a
+                    // "name", and FileEntry is {in,out}, so routing this through
+                    // it made the second overlay silently drop the first: the
+                    // key inherited the exact clobbering it exists to avoid.
+                    //
+                    // Concatenating rather than deduplicating here on purpose.
+                    // merge_fat_files owns that policy, and it distinguishes an
+                    // idempotent re-emit from a real collision; doing it twice,
+                    // in two places, is how the two would drift.
+                    concat_json_array(entry, overlay_val);
+                } else {
+                    deep_merge_json(entry, overlay_val);
+                }
             }
         }
         (Value::Array(base_arr), Value::Array(overlay_arr)) => {
@@ -715,16 +762,26 @@ pub fn deep_merge_json(base: &mut Value, overlay: Value) {
 /// share an output path but resolve from different inputs are a hard error: a
 /// silent overwrite of a boot file (e.g. `overlays/foo.dtbo`) could brick the
 /// device, so the conflict must surface at build time.
+///
+/// Only appended entries are checked. Base `files` are carried through
+/// unexamined even when two of them share an output: such a manifest built
+/// before this feature existed (fatfs is last-write-wins) and turning it into a
+/// build failure here would be an unannounced break of manifests nobody
+/// touched. The dedup is a property of appending, which is what the doc above
+/// describes and what a delivery hook can actually trip.
+///
+/// Comparison is on [`fat_output_key`], not the raw string - see there for why
+/// exact equality was not enough.
 pub fn merge_fat_files(base: &[FileEntry], append: &[FileEntry]) -> Result<Vec<FileEntry>, String> {
-    let mut merged: Vec<FileEntry> = Vec::new();
-    for entry in base.iter().chain(append.iter()) {
+    let mut merged: Vec<FileEntry> = base.to_vec();
+    for entry in append {
         if let Some(existing) = merged
             .iter()
-            .find(|e| e.output_name() == entry.output_name())
+            .find(|e| fat_output_key(e.output_name()) == fat_output_key(entry.output_name()))
         {
             if existing.input_filename() != entry.input_filename() {
                 return Err(format!(
-                    "[ERROR] Conflicting FAT file entries for output '{}': inputs '{}' and '{}' differ. \
+                    "Conflicting FAT file entries for output '{}': inputs '{}' and '{}' differ. \
 A custom overlay must not overwrite an existing boot file; give it a distinct output name.",
                     entry.output_name(),
                     existing.input_filename(),
@@ -737,6 +794,28 @@ A custom overlay must not overwrite an existing boot file; give it a distinct ou
         merged.push(entry.clone());
     }
     Ok(merged)
+}
+
+/// Normalize a FAT output path to the identity the filesystem will actually
+/// resolve it by.
+///
+/// Comparing output paths verbatim let a variant duplicate through the guard
+/// and into the image, where fatfs collapses it anyway: `eq_name` uppercases
+/// both sides, `find_entry` compares ignoring case, and `create_file` returns
+/// the existing entry *without truncating*. So `overlays/VC4.DTBO` written over
+/// `overlays/vc4.dtbo` produced one directory entry holding the overlay's bytes
+/// followed by whatever of the original ran past them - the brick this guard
+/// exists to prevent, reached through a spelling it did not check.
+///
+/// Uppercasing covers the case half. Dropping empty segments covers the path
+/// form half, so `./x`, `x` and `a//b` do not read as three distinct outputs.
+fn fat_output_key(output: &str) -> String {
+    output
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .map(|segment| segment.to_uppercase())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
@@ -1862,5 +1941,106 @@ mod tests {
             r#"{"type":"fat","variant":"FAT32","files":[{"in":"config.txt","out":"config.txt"}]}"#;
         let args: BuildArgs = serde_json::from_str(json).unwrap();
         assert!(args.fat_files_append().is_empty());
+    }
+
+    #[test]
+    fn two_overlays_each_appending_a_file_keep_both() {
+        // The composability case, and the reason files_append exists: two
+        // delivery hooks each contribute one overlay. Under the generic array
+        // rule the second replaced the first and one .dtbo vanished with no
+        // warning, so the collision guard never even saw it.
+        let mut base = serde_json::json!({
+            "build_args": {
+                "type": "fat",
+                "files_append": [{"in": "a.dtbo", "out": "overlays/a.dtbo"}]
+            }
+        });
+        let overlay = serde_json::json!({
+            "build_args": {
+                "files_append": [{"in": "b.dtbo", "out": "overlays/b.dtbo"}]
+            }
+        });
+
+        deep_merge_json(&mut base, overlay);
+
+        let appended = base["build_args"]["files_append"].as_array().unwrap();
+        assert_eq!(appended.len(), 2, "both overlays must survive the merge");
+        assert_eq!(appended[0]["in"], "a.dtbo");
+        assert_eq!(appended[1]["in"], "b.dtbo");
+    }
+
+    #[test]
+    fn an_overlay_still_replaces_the_base_files_list() {
+        // The other half of the same decision. `files` keeps replace semantics
+        // - that is precisely why files_append had to exist - so appending must
+        // not leak into it.
+        let mut base = serde_json::json!({
+            "build_args": {"files": [{"in": "old.bin", "out": "old.bin"}]}
+        });
+        let overlay = serde_json::json!({
+            "build_args": {"files": [{"in": "new.bin", "out": "new.bin"}]}
+        });
+
+        deep_merge_json(&mut base, overlay);
+
+        let files = base["build_args"]["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["in"], "new.bin");
+    }
+
+    #[test]
+    fn a_case_variant_output_is_a_collision_not_a_second_file() {
+        // fatfs resolves names case-insensitively and create_file does not
+        // truncate, so these two would have become one entry holding the
+        // overlay's bytes followed by the tail of the original.
+        let base = vec![FileEntry::Object {
+            input: "vc4-kms-v3d-pi5.dtbo".to_string(),
+            output: "overlays/vc4-kms-v3d-pi5.dtbo".to_string(),
+        }];
+        let append = vec![FileEntry::Object {
+            input: "user.dtbo".to_string(),
+            output: "overlays/VC4-KMS-V3D-PI5.DTBO".to_string(),
+        }];
+
+        let err = merge_fat_files(&base, &append).unwrap_err();
+        assert!(err.contains("Conflicting FAT file entries"), "{err}");
+        assert!(
+            !err.starts_with("[ERROR]"),
+            "the caller's log_error adds that prefix; carrying it here printed it twice: {err}"
+        );
+    }
+
+    #[test]
+    fn path_form_variants_of_one_output_collide() {
+        let base = vec![FileEntry::Object {
+            input: "a.bin".to_string(),
+            output: "./boot//x.bin".to_string(),
+        }];
+        let append = vec![FileEntry::Object {
+            input: "b.bin".to_string(),
+            output: "boot/x.bin".to_string(),
+        }];
+
+        assert!(merge_fat_files(&base, &append).is_err());
+    }
+
+    #[test]
+    fn duplicate_outputs_within_base_files_are_not_a_collision() {
+        // Pre-existing manifests did this and built; the dedup is a property of
+        // appending, so turning base-vs-base into a hard error would break
+        // manifests nobody edited.
+        let base = vec![
+            FileEntry::Object {
+                input: "a.bin".to_string(),
+                output: "shared".to_string(),
+            },
+            FileEntry::Object {
+                input: "b.bin".to_string(),
+                output: "shared".to_string(),
+            },
+        ];
+
+        let merged = merge_fat_files(&base, &[]).unwrap();
+        assert_eq!(merged.len(), 2, "base entries pass through unexamined");
     }
 }
