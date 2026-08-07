@@ -323,8 +323,12 @@ fn copy_manifest_inputs(
             {
                 copy_file(&src, &build_dir.join(template), verbose)?;
             }
-            // Copy FAT source files (e.g., initramfs, bzImage) so provision can rebuild FAT images
-            for file_entry in image.files() {
+            // Copy FAT source files (e.g., initramfs, bzImage) so provision can
+            // rebuild FAT images. all_files() rather than files(): an appended
+            // entry names a source that provision needs staged just as much as a
+            // base one, and skipping it produced a bundle that referenced a file
+            // it had not copied.
+            for file_entry in &image.all_files()? {
                 let input_filename = file_entry.input_filename();
                 if let Some(src) = find_file_in_dirs(input_filename, input_dirs) {
                     let dest = build_dir.join(input_filename);
