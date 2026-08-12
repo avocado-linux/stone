@@ -382,6 +382,7 @@ fn build_all_images(
                             variant,
                             files,
                             files_append,
+                            label,
                         }),
                     size,
                     size_unit,
@@ -411,13 +412,16 @@ fn build_all_images(
                     let output_in_build = build_dir.join(out);
                     let base_path = PathBuf::from(".");
 
-                    let options = fat::FatImageOptions::new()
+                    let mut options = fat::FatImageOptions::new()
                         .with_manifest_path(&temp_manifest_path)
                         .with_base_path(&base_path)
                         .with_output_path(&output_in_images)
                         .with_size_mebibytes(size_mb)
                         .with_fat_type(fat_type)
                         .with_verbose(verbose);
+                    if let Some(label) = label {
+                        options = options.with_label(label.as_str());
+                    }
 
                     fat::create_fat_image(&options)?;
                     let _ = fs::remove_file(&temp_manifest_path);

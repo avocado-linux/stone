@@ -34,6 +34,13 @@ pub enum BuildArgs {
         /// device-tree overlay) without restating the base `files` list.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files_append: Vec<FileEntry>,
+        /// FAT volume label. `src/fat.rs` has carried the write for this all
+        /// along; there was no field here to plumb it from, so three shipped
+        /// manifests asking for `BOOT` produced images labelled with the `FATFS`
+        /// default instead - silently, which is what refusing unknown keys now
+        /// prevents.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     #[serde(rename = "fwup")]
     Fwup {
@@ -69,6 +76,14 @@ impl BuildArgs {
         match self {
             BuildArgs::Fat { files_append, .. } => files_append,
             _ => &[],
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn fat_label(&self) -> Option<&str> {
+        match self {
+            BuildArgs::Fat { label, .. } => label.as_deref(),
+            _ => None,
         }
     }
 
@@ -837,6 +852,7 @@ mod tests {
             variant: FatVariant::Fat32,
             files: vec![],
             files_append: vec![],
+            label: None,
         };
 
         let serialized = serde_json::to_value(&fat_args).unwrap();
@@ -863,6 +879,7 @@ mod tests {
             variant: FatVariant::Fat16,
             files: vec![],
             files_append: vec![],
+            label: None,
         };
         assert_eq!(fat_args.build_type(), "fat");
 
@@ -880,6 +897,7 @@ mod tests {
                 variant: FatVariant::Fat32,
                 files: vec![],
                 files_append: vec![],
+                label: None,
             }),
             size: 100,
             size_unit: "megabytes".to_string(),
@@ -967,6 +985,7 @@ mod tests {
                 },
             ],
             files_append: vec![],
+            label: None,
         };
 
         assert_eq!(fat_args.build_type(), "fat");

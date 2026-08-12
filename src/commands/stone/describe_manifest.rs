@@ -148,8 +148,12 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
                             variant,
                             files,
                             files_append,
+                            label,
                         } => {
                             output.push_str(&format!("      variant: {variant:?}\n"));
+                            if let Some(label) = label {
+                                output.push_str(&format!("      label: \"{label}\"\n"));
+                            }
                             if !files.is_empty() {
                                 output.push_str(&format!("      files: {} file(s)\n", files.len()));
                             }
@@ -232,8 +236,12 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
                     variant,
                     files,
                     files_append,
+                    label,
                 } => {
                     output.push_str(&format!("  variant: {variant:?}\n"));
+                    if let Some(label) = label {
+                        output.push_str(&format!("  label: \"{label}\"\n"));
+                    }
                     if !files.is_empty() {
                         output.push_str(&format!("  files: {} file(s)\n", files.len()));
                     }

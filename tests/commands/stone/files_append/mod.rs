@@ -268,3 +268,88 @@ fn a_valid_manifest_still_parses_after_the_unknown_key_refusal() {
     let output = temp_dir.path().join("os-bundle.aos");
     run_bundle(input, &build_dir, &output).success();
 }
+
+/// Read a FAT32 image's volume label out of its boot sector. BS_VolLab sits at
+/// offset 0x47 for FAT32 and is 11 bytes, space-padded.
+fn fat32_volume_label(image: &std::path::Path) -> String {
+    let bytes = fs::read(image).unwrap();
+    String::from_utf8_lossy(&bytes[0x47..0x47 + 11])
+        .trim_end()
+        .to_string()
+}
+
+fn manifest_with_label(label: &str) -> String {
+    manifest_with_append(r#"{"in": "a.dtbo", "out": "overlays/a.dtbo"}"#).replace(
+        r#""variant": "FAT32","#,
+        &format!(r#""variant": "FAT32", "label": "{label}","#),
+    )
+}
+
+#[test]
+fn a_manifest_label_reaches_the_fat_volume_label() {
+    // Three shipped meta-avocado manifests (stm32mp25-dk, orangepi-5-plus,
+    // rzv2n-sr-som) set "label": "BOOT" on a fat build_args. src/fat.rs has had
+    // the volume-label write all along, but BuildArgs::Fat carried no field to
+    // plumb it from, so those boot partitions were labelled FATFS - silently,
+    // which is the same class of failure as the ignored files_append key.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(input.join("manifest.json"), manifest_with_label("BOOT")).unwrap();
+
+    let build_dir = temp_dir.path().join("_build");
+    let output = temp_dir.path().join("os-bundle.aos");
+    run_bundle(input, &build_dir, &output).success();
+
+    assert_eq!(
+        fat32_volume_label(&build_dir.join("boot.img")),
+        "BOOT",
+        "the manifest's label must reach the image, not be dropped for the FATFS default"
+    );
+}
+
+#[test]
+fn an_absent_label_keeps_the_existing_default() {
+    // The other half: adding the field must not change what a manifest without
+    // one produces, or every existing image's label moves.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(
+        input.join("manifest.json"),
+        manifest_with_append(r#"{"in": "a.dtbo", "out": "overlays/a.dtbo"}"#),
+    )
+    .unwrap();
+
+    let build_dir = temp_dir.path().join("_build");
+    let output = temp_dir.path().join("os-bundle.aos");
+    run_bundle(input, &build_dir, &output).success();
+
+    assert_eq!(
+        fat32_volume_label(&build_dir.join("boot.img")),
+        "FATFS",
+        "a manifest with no label must still get the documented default"
+    );
+}
+
+#[test]
+fn describe_manifest_shows_the_label_it_will_write() {
+    // describe-manifest is the operator's confirmation surface, and the label was
+    // the one build_arg it did not report - so a manifest asking for BOOT looked
+    // identical to one asking for nothing.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(input.join("manifest.json"), manifest_with_label("BOOT")).unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "describe-manifest",
+            "-m",
+            &input.join("manifest.json").to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(r#"label: "BOOT""#));
+}

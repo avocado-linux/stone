@@ -209,6 +209,7 @@ fn build_image(
                 variant,
                 files,
                 files_append,
+                label,
             } => {
                 let merged_files = merge_fat_files(files, files_append)?;
                 build_fat_image(FatImageParams {
@@ -221,6 +222,7 @@ fn build_image(
                     input_dirs,
                     build_dir,
                     verbose,
+                    label: label.as_deref(),
                 })
             }
             BuildArgs::Fwup { template } => {
@@ -251,6 +253,7 @@ struct FatImageParams<'a> {
     input_dirs: &'a [PathBuf],
     build_dir: &'a Path,
     verbose: bool,
+    label: Option<&'a str>,
 }
 
 fn build_fat_image(params: FatImageParams) -> Result<(), String> {
@@ -287,13 +290,16 @@ fn build_fat_image(params: FatImageParams) -> Result<(), String> {
     let base_path = PathBuf::from(".");
 
     // Create FAT image options
-    let options = fat::FatImageOptions::new()
+    let mut options = fat::FatImageOptions::new()
         .with_manifest_path(&temp_manifest_path)
         .with_base_path(&base_path)
         .with_output_path(&output_path)
         .with_size_mebibytes(size_mb)
         .with_fat_type(fat_type)
         .with_verbose(params.verbose);
+    if let Some(label) = params.label {
+        options = options.with_label(label);
+    }
 
     // Build the FAT image
     let result = fat::create_fat_image(&options);
