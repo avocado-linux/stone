@@ -785,9 +785,7 @@ fn execute_provision_with_profile(
         manifest
             .get_provision_default()
             .map(|s| s.to_string())
-            .ok_or_else(|| {
-                "[ERROR] No provision profile specified and no default found.".to_string()
-            })
+            .ok_or_else(|| "No provision profile specified and no default found.".to_string())
     })?;
 
     if verbose {
@@ -797,7 +795,7 @@ fn execute_provision_with_profile(
     // Get the specific profile
     let profile = manifest
         .get_provision_profile(&profile_name)
-        .ok_or_else(|| format!("[ERROR] Provision profile '{profile_name}' not found."))?;
+        .ok_or_else(|| format!("Provision profile '{profile_name}' not found."))?;
 
     // Resolve environment variables from the profile
     let resolved_envs = provision.resolve_envs(profile)?;
@@ -833,7 +831,7 @@ fn execute_provision_script(
     additional_envs: &HashMap<String, String>,
 ) -> Result<(), String> {
     let provision_path = find_file_in_dirs(provision_file, input_dirs).ok_or_else(|| {
-        format!("[ERROR] Provision file '{provision_file}' not found in any input directory.")
+        format!("Provision file '{provision_file}' not found in any input directory.")
     })?;
 
     // Use the directory containing the manifest as the working directory
@@ -867,13 +865,13 @@ fn execute_provision_script(
     // Set default environment variables for the provision script
     let manifest_path_canonical = manifest_path
         .canonicalize()
-        .map_err(|e| format!("[ERROR] Failed to resolve manifest path: {e}"))?;
+        .map_err(|e| format!("Failed to resolve manifest path: {e}"))?;
     let build_dir_canonical = build_dir
         .canonicalize()
-        .map_err(|e| format!("[ERROR] Failed to resolve build directory path: {e}"))?;
+        .map_err(|e| format!("Failed to resolve build directory path: {e}"))?;
     let input_dir_canonical = input_dir
         .canonicalize()
-        .map_err(|e| format!("[ERROR] Failed to resolve input directory path: {e}"))?;
+        .map_err(|e| format!("Failed to resolve input directory path: {e}"))?;
     command.env("AVOCADO_STONE_MANIFEST", manifest_path_canonical);
     command.env("AVOCADO_STONE_BUILD_DIR", build_dir_canonical);
     command.env("AVOCADO_STONE_DATA_DIR", input_dir_canonical);
