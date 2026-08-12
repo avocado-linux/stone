@@ -227,7 +227,7 @@ pub struct StorageDevice {
     pub partitions: Vec<Partition>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Image {
     String(String),
@@ -242,6 +242,57 @@ pub enum Image {
         #[serde(skip_serializing_if = "Option::is_none")]
         uuid: Option<String>,
     },
+}
+
+/// The object form of [`Image`], as a named struct so it has a derived
+/// deserializer of its own to delegate to.
+///
+/// Exists only for [`Image`]'s `Deserialize` impl. Field drift is caught by the
+/// compiler: `Image::Object` is constructed exhaustively from this struct, so a
+/// field added to the variant fails to compile until it is added here too.
+#[derive(Deserialize)]
+struct ImageObject {
+    out: String,
+    #[serde(default)]
+    build_args: Option<BuildArgs>,
+    size: i64,
+    size_unit: String,
+    #[serde(default)]
+    block_size: Option<u32>,
+    #[serde(default)]
+    uuid: Option<String>,
+}
+
+/// Hand-written rather than `#[serde(untagged)]` so a bad object reports which
+/// key was wrong.
+///
+/// `untagged` discards every variant's error when all of them fail, so the
+/// `unknown field ... expected one of ...` that `deny_unknown_fields` produces
+/// inside `BuildArgs` never reached the operator - what surfaced was `data did
+/// not match any variant of untagged enum Image`, positioned at the end of the
+/// enclosing object rather than at the offending key. Refusing an unknown key is
+/// only useful if the message names it.
+///
+/// Dispatch here is unambiguous - a string is the `String` form, anything else
+/// must be the object form - so the object branch's own error can be propagated
+/// verbatim instead of guessed at.
+impl<'de> Deserialize<'de> for Image {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        if let Value::String(filename) = value {
+            return Ok(Image::String(filename));
+        }
+        let object: ImageObject =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(Image::Object {
+            out: object.out,
+            build_args: object.build_args,
+            size: object.size,
+            size_unit: object.size_unit,
+            block_size: object.block_size,
+            uuid: object.uuid,
+        })
+    }
 }
 
 impl Image {
@@ -2060,6 +2111,90 @@ mod tests {
 
         let merged = merge_fat_files(&base, &[]).unwrap();
         assert_eq!(merged.len(), 2, "base entries pass through unexamined");
+    }
+
+    // --- Image deserialization diagnostics ---
+
+    const IMAGE_WITH_BAD_BUILD_ARGS: &str = r#"{
+        "out": "boot.img", "size": 64, "size_unit": "mebibytes",
+        "build_args": {"type": "fat", "variant": "FAT32", "file_append": []}
+    }"#;
+
+    #[test]
+    fn an_unknown_build_args_key_surfaces_through_image() {
+        // `deny_unknown_fields` on BuildArgs produces a message naming the key and
+        // listing the valid ones. Under `#[serde(untagged)]` on Image, serde threw it
+        // away and reported "did not match any variant of untagged enum Image", so the
+        // refusal told the operator nothing about what to change. This asserts the
+        // inner message reaches the caller.
+        let err = serde_json::from_str::<Image>(IMAGE_WITH_BAD_BUILD_ARGS).unwrap_err();
+        let err = err.to_string();
+        assert!(err.contains("file_append"), "must name the bad key: {err}");
+        assert!(
+            err.contains("files_append"),
+            "must list the valid keys so the fix is obvious: {err}"
+        );
+        assert!(
+            !err.contains("did not match any variant"),
+            "the untagged fallback message is what this impl exists to avoid: {err}"
+        );
+    }
+
+    #[test]
+    fn a_bad_image_object_does_not_report_as_a_string_image() {
+        // The failure mode of dispatching by trial: a non-string value must be judged
+        // as an object and report the object's error, never "expected a string".
+        let err = serde_json::from_str::<Image>(IMAGE_WITH_BAD_BUILD_ARGS)
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("expected a string"), "{err}");
+    }
+
+    #[test]
+    fn both_image_forms_still_deserialize() {
+        // Backward compatibility for the hand-written impl: the bare-filename form and
+        // the object form must both parse exactly as they did under `untagged`.
+        let s: Image = serde_json::from_str(r#""avocado-image-var.btrfs""#).unwrap();
+        assert!(matches!(s, Image::String(ref f) if f == "avocado-image-var.btrfs"));
+
+        let o: Image = serde_json::from_str(
+            r#"{"out": "boot.img", "size": 64, "size_unit": "mebibytes",
+                "block_size": 512, "uuid": "abcd"}"#,
+        )
+        .unwrap();
+        assert_eq!(o.out(), "boot.img");
+        assert_eq!(o.size(), Some(64));
+        assert_eq!(o.size_unit(), Some("mebibytes"));
+        assert_eq!(o.block_size(), Some(512));
+        assert_eq!(o.uuid(), Some("abcd"));
+        assert!(o.build_args().is_none(), "build_args stays optional");
+    }
+
+    #[test]
+    fn an_image_object_round_trips_through_serde() {
+        // Serialize is still derived while Deserialize is hand-written; this pins the
+        // two to the same field names, which a mismatch would otherwise hide until a
+        // merged manifest failed to re-read.
+        let original: Image = serde_json::from_str(
+            r#"{"out": "boot.img", "size": 64, "size_unit": "mebibytes",
+                "build_args": {"type": "fat", "variant": "FAT32",
+                               "label": "BOOT",
+                               "files_append": [{"in": "a.dtbo", "out": "overlays/a.dtbo"}]}}"#,
+        )
+        .unwrap();
+        let reparsed: Image = serde_json::from_str(&serde_json::to_string(&original).unwrap())
+            .expect("what Serialize writes, Deserialize must accept");
+        assert_eq!(reparsed.all_files().unwrap().len(), 1);
+        assert_eq!(reparsed.build_args().unwrap().fat_label(), Some("BOOT"));
+    }
+
+    #[test]
+    fn a_missing_required_image_field_names_that_field() {
+        let err = serde_json::from_str::<Image>(r#"{"out": "boot.img", "size": 64}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("size_unit"), "{err}");
+        assert!(!err.contains("did not match any variant"), "{err}");
     }
 
     #[test]
