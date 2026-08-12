@@ -236,18 +236,100 @@ fn bundle_rejects_a_misspelled_files_append() {
 
     let build_dir = temp_dir.path().join("_build");
     let output = temp_dir.path().join("os-bundle.aos");
-    // Refusing is the property under test. The message cannot name the offending
-    // key: `Image` is an untagged enum, and serde discards the inner variant
-    // errors when every variant fails, so what surfaces is "did not match any
-    // variant" with a line number pointing at the end of the enclosing object.
-    // Asserting the key name here would pin a diagnostic the parser cannot give.
-    run_bundle(input, &build_dir, &output)
-        .failure()
-        .stdout(predicates::str::contains("Failed to parse manifest JSON"));
+    // Refusing is half the property; naming the key is the other half. Refusing an
+    // unknown key only helps if the operator can find it, and `Image`'s hand-written
+    // Deserialize exists so the message says which key and which are valid. Under
+    // `#[serde(untagged)]` this printed "did not match any variant of untagged enum
+    // Image" - a refusal the author of the typo could not act on.
+    run_bundle(input, &build_dir, &output).failure().stdout(
+        predicates::str::contains("unknown field `file_append`")
+            .and(predicates::str::contains("expected one of"))
+            .and(predicates::str::contains("files_append"))
+            .and(predicates::str::contains("did not match any variant").not()),
+    );
 
     assert!(
         !output.exists(),
         "no bundle may be produced from a manifest whose append key was not understood"
+    );
+}
+
+#[test]
+fn a_parse_error_is_reported_with_one_error_prefix() {
+    // `main` funnels every Err through `log_error`, which prefixes `[ERROR]`, so a
+    // message carrying its own literal printed "[ERROR] [ERROR] Failed to parse".
+    // Cosmetic until `deny_unknown_fields` started routing ordinary typos here.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(
+        input.join("manifest.json"),
+        manifest_with_unknown_key("file_append"),
+    )
+    .unwrap();
+
+    let build_dir = temp_dir.path().join("_build");
+    let output = temp_dir.path().join("os-bundle.aos");
+    let out = run_bundle(input, &build_dir, &output)
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8_lossy(&out);
+
+    assert_eq!(
+        out.matches("[ERROR]").count(),
+        1,
+        "the prefix belongs to log_error alone: {out}"
+    );
+}
+
+#[test]
+fn an_image_given_as_a_bare_filename_still_parses() {
+    // The other half of the hand-written Deserialize. `Image` is string-or-object,
+    // and the "var": "avocado-image-var.btrfs" form every manifest here uses is the
+    // string one - dispatching on the JSON shape must not break it.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(
+        input.join("manifest.json"),
+        manifest_with_append(r#"{"in": "a.dtbo", "out": "overlays/a.dtbo"}"#),
+    )
+    .unwrap();
+
+    Command::cargo_bin("stone")
+        .unwrap()
+        .args([
+            "describe-manifest",
+            "-m",
+            &input.join("manifest.json").to_string_lossy(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("var → avocado-image-var.btrfs"));
+}
+
+#[test]
+fn a_missing_required_image_field_names_the_field() {
+    // The regression this impl really guards: any bad object under `images` used to
+    // collapse to "did not match any variant", not just an unknown key. A dropped
+    // `size_unit` is the same class of mistake and must read the same way.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(
+        input.join("manifest.json"),
+        manifest_with_append(r#"{"in": "a.dtbo", "out": "overlays/a.dtbo"}"#)
+            .replace(r#""size_unit": "mebibytes","#, ""),
+    )
+    .unwrap();
+
+    let build_dir = temp_dir.path().join("_build");
+    let output = temp_dir.path().join("os-bundle.aos");
+    run_bundle(input, &build_dir, &output).failure().stdout(
+        predicates::str::contains("missing field `size_unit`")
+            .and(predicates::str::contains("did not match any variant").not()),
     );
 }
 
@@ -352,34 +434,4 @@ fn describe_manifest_shows_the_label_it_will_write() {
         .assert()
         .success()
         .stdout(predicates::str::contains(r#"label: "BOOT""#));
-}
-
-#[test]
-fn a_parse_error_is_reported_with_one_error_prefix() {
-    // `main` funnels every Err through `log_error`, which prefixes `[ERROR]`, so a
-    // message carrying its own literal printed "[ERROR] [ERROR] Failed to parse".
-    // Cosmetic until `deny_unknown_fields` started routing ordinary typos here.
-    let temp_dir = TempDir::new().unwrap();
-    let input = temp_dir.path();
-    write_inputs(input);
-    fs::write(
-        input.join("manifest.json"),
-        manifest_with_unknown_key("file_append"),
-    )
-    .unwrap();
-
-    let build_dir = temp_dir.path().join("_build");
-    let output = temp_dir.path().join("os-bundle.aos");
-    let out = run_bundle(input, &build_dir, &output)
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
-    let out = String::from_utf8_lossy(&out);
-
-    assert_eq!(
-        out.matches("[ERROR]").count(),
-        1,
-        "the prefix belongs to log_error alone: {out}"
-    );
 }
