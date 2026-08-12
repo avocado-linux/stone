@@ -212,3 +212,59 @@ fn describe_manifest_lists_the_appended_file_not_just_its_count() {
         .success()
         .stdout(predicates::str::contains("overlays/a.dtbo"));
 }
+
+/// A manifest whose FAT build_args carry an unknown key, for the misspelling case.
+fn manifest_with_unknown_key(key: &str) -> String {
+    manifest_with_append(r#"{"in": "a.dtbo", "out": "overlays/a.dtbo"}"#)
+        .replace("\"files_append\"", &format!("\"{key}\""))
+}
+
+#[test]
+fn bundle_rejects_a_misspelled_files_append() {
+    // The silent-ignore case. `file_append` parsed clean, yielded an image with
+    // no overlay, and exited 0 - and this key's author is a delivery hook, so
+    // nothing reads the output. The board then boots without its device-tree
+    // overlay and the only signal is a missing line in describe-manifest.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(
+        input.join("manifest.json"),
+        manifest_with_unknown_key("file_append"),
+    )
+    .unwrap();
+
+    let build_dir = temp_dir.path().join("_build");
+    let output = temp_dir.path().join("os-bundle.aos");
+    // Refusing is the property under test. The message cannot name the offending
+    // key: `Image` is an untagged enum, and serde discards the inner variant
+    // errors when every variant fails, so what surfaces is "did not match any
+    // variant" with a line number pointing at the end of the enclosing object.
+    // Asserting the key name here would pin a diagnostic the parser cannot give.
+    run_bundle(input, &build_dir, &output)
+        .failure()
+        .stdout(predicates::str::contains("Failed to parse manifest JSON"));
+
+    assert!(
+        !output.exists(),
+        "no bundle may be produced from a manifest whose append key was not understood"
+    );
+}
+
+#[test]
+fn a_valid_manifest_still_parses_after_the_unknown_key_refusal() {
+    // The other half: deny_unknown_fields interacts with serde's internal
+    // tagging, so the `type` discriminator itself must not read as unknown.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(
+        input.join("manifest.json"),
+        manifest_with_append(r#"{"in": "a.dtbo", "out": "overlays/a.dtbo"}"#),
+    )
+    .unwrap();
+
+    let build_dir = temp_dir.path().join("_build");
+    let output = temp_dir.path().join("os-bundle.aos");
+    run_bundle(input, &build_dir, &output).success();
+}

@@ -12,8 +12,17 @@ pub enum FatVariant {
     Fat32,
 }
 
+/// Unknown keys are refused rather than ignored. `files_append` is the first key
+/// here whose author is a delivery hook rather than a person, so a misspelling or
+/// a key nested one level off produced an image without the overlay, exited 0,
+/// and left a missing line in `describe-manifest` as the only signal - by which
+/// point the board has already booted without its device-tree overlay.
+///
+/// The attribute sits on the enum, not on the variant: `deny_unknown_fields` is a
+/// container attribute, and serde's derive knows to exempt the `type`
+/// discriminator that internal tagging puts in the same map.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum BuildArgs {
     #[serde(rename = "fat")]
     Fat {
