@@ -454,24 +454,14 @@ pub fn resolve_partition_size_bytes(
 
 impl Manifest {
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            format!(
-                "[ERROR] Failed to read manifest file '{}': {}",
-                path.display(),
-                e
-            )
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read manifest file '{}': {}", path.display(), e))?;
 
-        let manifest: Self = serde_json::from_str(&content).map_err(|e| {
-            format!(
-                "[ERROR] Failed to parse manifest JSON '{}': {}",
-                path.display(),
-                e
-            )
-        })?;
+        let manifest: Self = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse manifest JSON '{}': {}", path.display(), e))?;
         manifest.validate_partitions().map_err(|e| {
             format!(
-                "[ERROR] Manifest '{}' has invalid partition layout: {}",
+                "Manifest '{}' has invalid partition layout: {}",
                 path.display(),
                 e
             )
@@ -552,14 +542,14 @@ impl Manifest {
 
         let base_content = std::fs::read_to_string(base_path).map_err(|e| {
             format!(
-                "[ERROR] Failed to read manifest file '{}': {}",
+                "Failed to read manifest file '{}': {}",
                 base_path.display(),
                 e
             )
         })?;
         let mut merged: Value = serde_json::from_str(&base_content).map_err(|e| {
             format!(
-                "[ERROR] Failed to parse manifest JSON '{}': {}",
+                "Failed to parse manifest JSON '{}': {}",
                 base_path.display(),
                 e
             )
@@ -568,14 +558,14 @@ impl Manifest {
         for overlay_path in overlay_paths {
             let overlay_content = std::fs::read_to_string(overlay_path).map_err(|e| {
                 format!(
-                    "[ERROR] Failed to read overlay file '{}': {}",
+                    "Failed to read overlay file '{}': {}",
                     overlay_path.display(),
                     e
                 )
             })?;
             let overlay_value: Value = serde_json::from_str(&overlay_content).map_err(|e| {
                 format!(
-                    "[ERROR] Failed to parse overlay JSON '{}': {}",
+                    "Failed to parse overlay JSON '{}': {}",
                     overlay_path.display(),
                     e
                 )
@@ -584,11 +574,11 @@ impl Manifest {
         }
 
         let merged_json = serde_json::to_string_pretty(&merged)
-            .map_err(|e| format!("[ERROR] Failed to serialize merged manifest: {}", e))?;
+            .map_err(|e| format!("Failed to serialize merged manifest: {}", e))?;
 
         let manifest: Self = serde_json::from_value(merged).map_err(|e| {
             format!(
-                "[ERROR] Merged manifest (base '{}' + {} overlay(s)) is invalid: {}",
+                "Merged manifest (base '{}' + {} overlay(s)) is invalid: {}",
                 base_path.display(),
                 overlay_paths.len(),
                 e
@@ -596,7 +586,7 @@ impl Manifest {
         })?;
         manifest.validate_partitions().map_err(|e| {
             format!(
-                "[ERROR] Merged manifest (base '{}' + {} overlay(s)) has invalid partition layout: {}",
+                "Merged manifest (base '{}' + {} overlay(s)) has invalid partition layout: {}",
                 base_path.display(),
                 overlay_paths.len(),
                 e
@@ -633,12 +623,12 @@ impl Provision {
                                 }
                             } else {
                                 return Err(format!(
-                                    "[ERROR] Named environment block '{env_name}' not found in provision.envs."
+                                    "Named environment block '{env_name}' not found in provision.envs."
                                 ));
                             }
                         } else {
                             return Err(format!(
-                                "[ERROR] Named environment block '{env_name}' referenced but no provision.envs defined."
+                                "Named environment block '{env_name}' referenced but no provision.envs defined."
                             ));
                         }
                     }
@@ -2070,5 +2060,17 @@ mod tests {
 
         let merged = merge_fat_files(&base, &[]).unwrap();
         assert_eq!(merged.len(), 2, "base entries pass through unexamined");
+    }
+
+    #[test]
+    fn manifest_parse_errors_carry_no_error_prefix() {
+        // `main` routes every Err through `log_error`, which adds `[ERROR]`; a literal
+        // one here printed it twice. Harmless until deny_unknown_fields made ordinary
+        // typos take this path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        let err = Manifest::from_file(&path).unwrap_err();
+        assert!(!err.contains("[ERROR]"), "log_error owns the prefix: {err}");
     }
 }

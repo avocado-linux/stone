@@ -353,3 +353,33 @@ fn describe_manifest_shows_the_label_it_will_write() {
         .success()
         .stdout(predicates::str::contains(r#"label: "BOOT""#));
 }
+
+#[test]
+fn a_parse_error_is_reported_with_one_error_prefix() {
+    // `main` funnels every Err through `log_error`, which prefixes `[ERROR]`, so a
+    // message carrying its own literal printed "[ERROR] [ERROR] Failed to parse".
+    // Cosmetic until `deny_unknown_fields` started routing ordinary typos here.
+    let temp_dir = TempDir::new().unwrap();
+    let input = temp_dir.path();
+    write_inputs(input);
+    fs::write(
+        input.join("manifest.json"),
+        manifest_with_unknown_key("file_append"),
+    )
+    .unwrap();
+
+    let build_dir = temp_dir.path().join("_build");
+    let output = temp_dir.path().join("os-bundle.aos");
+    let out = run_bundle(input, &build_dir, &output)
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8_lossy(&out);
+
+    assert_eq!(
+        out.matches("[ERROR]").count(),
+        1,
+        "the prefix belongs to log_error alone: {out}"
+    );
+}
