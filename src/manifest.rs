@@ -375,14 +375,11 @@ pub fn resolve_partition_size_bytes(
             .ok_or_else(|| "partition has size but no size_unit".to_string())?;
         return Ok((to_bytes(size as u64, Some(unit)), unit.to_string()));
     }
-    let name = p
-        .name
-        .as_deref()
-        .ok_or_else(|| "partition omits size but has no name to match against overrides".to_string())?;
+    let name = p.name.as_deref().ok_or_else(|| {
+        "partition omits size but has no name to match against overrides".to_string()
+    })?;
     let raw = overrides.get(name).copied().ok_or_else(|| {
-        format!(
-            "partition '{name}' omits size; no --partition-size override was supplied"
-        )
+        format!("partition '{name}' omits size; no --partition-size override was supplied")
     })?;
     let aligned = align_up(raw, partition_alignment_bytes(p));
     Ok((aligned, "bytes".to_string()))
@@ -423,10 +420,7 @@ impl Manifest {
         for (dev_name, device) in &self.storage_devices {
             let last_idx = device.partitions.len().saturating_sub(1);
             for (idx, p) in device.partitions.iter().enumerate() {
-                let label = p
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("#{idx}"));
+                let label = p.name.clone().unwrap_or_else(|| format!("#{idx}"));
                 match (p.size.is_some(), p.size_unit.is_some()) {
                     (true, false) => {
                         return Err(format!(
@@ -1471,7 +1465,12 @@ mod tests {
         assert!(merged_json.is_none());
     }
 
-    fn partition_with_size(size: Option<i64>, size_unit: Option<&str>, expand: Option<&str>, name: Option<&str>) -> Partition {
+    fn partition_with_size(
+        size: Option<i64>,
+        size_unit: Option<&str>,
+        expand: Option<&str>,
+        name: Option<&str>,
+    ) -> Partition {
         Partition {
             name: name.map(String::from),
             image: None,
@@ -1594,7 +1593,10 @@ mod tests {
         let p = partition_with_size(None, None, Some("true"), Some("var"));
         let overrides = HashMap::new();
         let err = resolve_partition_size_bytes(&p, &overrides).unwrap_err();
-        assert!(err.contains("var"), "error should name the partition: {err}");
+        assert!(
+            err.contains("var"),
+            "error should name the partition: {err}"
+        );
         assert!(err.contains("--partition-size"));
     }
 
@@ -1613,7 +1615,11 @@ mod tests {
             partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
             partition_with_size(None, None, Some("true"), Some("var")),
         ]);
-        assert!(m.validate_partitions().is_ok(), "{:?}", m.validate_partitions());
+        assert!(
+            m.validate_partitions().is_ok(),
+            "{:?}",
+            m.validate_partitions()
+        );
     }
 
     #[test]
@@ -1705,7 +1711,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m.json");
         std::fs::write(&path, json).unwrap();
-        let m = Manifest::from_file(&path).expect("from_file should accept omitted size with expand=true on last partition");
+        let m = Manifest::from_file(&path)
+            .expect("from_file should accept omitted size with expand=true on last partition");
         let parts = &m.storage_devices["main"].partitions;
         assert_eq!(parts.len(), 2);
         assert!(parts[1].size.is_none());

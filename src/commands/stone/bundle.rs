@@ -85,23 +85,22 @@ impl BundleArgs {
 }
 
 /// Parse `NAME=BYTES` strings (as accepted by `--partition-size`) into a map.
-pub fn parse_partition_size_overrides(
-    raw: &[String],
-) -> Result<HashMap<String, u64>, String> {
+pub fn parse_partition_size_overrides(raw: &[String]) -> Result<HashMap<String, u64>, String> {
     let mut map = HashMap::new();
     for spec in raw {
-        let (name, value) = spec.split_once('=').ok_or_else(|| {
-            format!("--partition-size expects NAME=BYTES, got '{spec}'")
-        })?;
+        let (name, value) = spec
+            .split_once('=')
+            .ok_or_else(|| format!("--partition-size expects NAME=BYTES, got '{spec}'"))?;
         let name = name.trim();
         if name.is_empty() {
             return Err(format!(
                 "--partition-size has empty partition name in '{spec}'"
             ));
         }
-        let bytes: u64 = value.trim().parse().map_err(|e| {
-            format!("--partition-size '{spec}' has non-integer byte value: {e}")
-        })?;
+        let bytes: u64 = value
+            .trim()
+            .parse()
+            .map_err(|e| format!("--partition-size '{spec}' has non-integer byte value: {e}"))?;
         map.insert(name.to_string(), bytes);
     }
     Ok(map)
@@ -695,7 +694,8 @@ fn generate_bundle_json(
     for device in manifest.storage_devices.values() {
         if !device.partitions.is_empty() {
             let mut cursor_bytes: u64 = 0;
-            let mut partitions: Vec<serde_json::Value> = Vec::with_capacity(device.partitions.len());
+            let mut partitions: Vec<serde_json::Value> =
+                Vec::with_capacity(device.partitions.len());
             for p in &device.partitions {
                 let (size_bytes, _size_unit_hint) =
                     resolve_partition_size_bytes(p, partition_size_overrides)?;
