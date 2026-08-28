@@ -610,8 +610,7 @@ fn calculate_avocado_env_vars(
                 block_size,
             )?
         } else {
-            let (bytes, _) =
-                resolve_partition_size_bytes(partition, partition_size_overrides)?;
+            let (bytes, _) = resolve_partition_size_bytes(partition, partition_size_overrides)?;
             bytes / (block_size as u64)
         };
 

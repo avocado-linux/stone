@@ -361,9 +361,22 @@ pub fn partition_alignment_bytes(p: &Partition) -> u64 {
     to_bytes(val, Some(unit))
 }
 
+/// Headroom added to a partition sized from an `--partition-size` override.
+///
+/// The override is the size of the filesystem image that will be flashed into
+/// the partition, and on a device the partition is only grown to the disk
+/// later, if at all. Turning on LUKS2 encryption in place needs room in front
+/// of the data (`cryptsetup reencrypt --reduce-device-size 32M`) plus the
+/// granularity btrfs can shrink by; without it a runtime that opts into
+/// encryption on a freshly flashed device has nowhere to put the header.
+/// Always reserving it keeps the layout independent of that choice, and costs
+/// 64 MiB of zeros at the end of a sparse-flashed image.
+pub const OVERRIDE_SIZE_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Resolve a partition's size to bytes, consulting the external override map
 /// when the manifest omits `size`. Returns the byte size and a unit hint
-/// (`"bytes"` when the override path was taken).
+/// (`"bytes"` when the override path was taken). The override is an image
+/// size; [`OVERRIDE_SIZE_HEADROOM_BYTES`] is added before alignment.
 pub fn resolve_partition_size_bytes(
     p: &Partition,
     overrides: &HashMap<String, u64>,
@@ -375,16 +388,16 @@ pub fn resolve_partition_size_bytes(
             .ok_or_else(|| "partition has size but no size_unit".to_string())?;
         return Ok((to_bytes(size as u64, Some(unit)), unit.to_string()));
     }
-    let name = p
-        .name
-        .as_deref()
-        .ok_or_else(|| "partition omits size but has no name to match against overrides".to_string())?;
-    let raw = overrides.get(name).copied().ok_or_else(|| {
-        format!(
-            "partition '{name}' omits size; no --partition-size override was supplied"
-        )
+    let name = p.name.as_deref().ok_or_else(|| {
+        "partition omits size but has no name to match against overrides".to_string()
     })?;
-    let aligned = align_up(raw, partition_alignment_bytes(p));
+    let raw = overrides.get(name).copied().ok_or_else(|| {
+        format!("partition '{name}' omits size; no --partition-size override was supplied")
+    })?;
+    let aligned = align_up(
+        raw + OVERRIDE_SIZE_HEADROOM_BYTES,
+        partition_alignment_bytes(p),
+    );
     Ok((aligned, "bytes".to_string()))
 }
 
@@ -423,10 +436,7 @@ impl Manifest {
         for (dev_name, device) in &self.storage_devices {
             let last_idx = device.partitions.len().saturating_sub(1);
             for (idx, p) in device.partitions.iter().enumerate() {
-                let label = p
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("#{idx}"));
+                let label = p.name.clone().unwrap_or_else(|| format!("#{idx}"));
                 match (p.size.is_some(), p.size_unit.is_some()) {
                     (true, false) => {
                         return Err(format!(
@@ -1471,7 +1481,12 @@ mod tests {
         assert!(merged_json.is_none());
     }
 
-    fn partition_with_size(size: Option<i64>, size_unit: Option<&str>, expand: Option<&str>, name: Option<&str>) -> Partition {
+    fn partition_with_size(
+        size: Option<i64>,
+        size_unit: Option<&str>,
+        expand: Option<&str>,
+        name: Option<&str>,
+    ) -> Partition {
         Partition {
             name: name.map(String::from),
             image: None,
@@ -1561,20 +1576,20 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_partition_size_uses_override_and_aligns() {
+    fn test_resolve_partition_size_uses_override_adds_headroom_and_aligns() {
         let p = partition_with_size(None, None, Some("true"), Some("var"));
-        // 100 MiB raw -> default 4 MiB alignment -> 100 MiB is already aligned
+        // 100 MiB image + 64 MiB headroom -> 164 MiB, already 4 MiB aligned
         let mut overrides = HashMap::new();
         overrides.insert("var".to_string(), 100 * 1024 * 1024);
         let (bytes, unit) = resolve_partition_size_bytes(&p, &overrides).unwrap();
-        assert_eq!(bytes, 100 * 1024 * 1024);
+        assert_eq!(bytes, 164 * 1024 * 1024);
         assert_eq!(unit, "bytes");
 
-        // 100 MiB + 1 byte -> rounds up to next 4 MiB boundary = 104 MiB
+        // 100 MiB + 1 byte + headroom -> rounds up to the next 4 MiB = 168 MiB
         let mut overrides2 = HashMap::new();
         overrides2.insert("var".to_string(), 100 * 1024 * 1024 + 1);
         let (bytes2, _) = resolve_partition_size_bytes(&p, &overrides2).unwrap();
-        assert_eq!(bytes2, 104 * 1024 * 1024);
+        assert_eq!(bytes2, 168 * 1024 * 1024);
     }
 
     #[test]
@@ -1583,10 +1598,10 @@ mod tests {
         p.size_alignment = Some(16);
         p.size_alignment_unit = Some("mebibytes".to_string());
         let mut overrides = HashMap::new();
-        // 100 MiB rounds up to next 16 MiB = 112 MiB
+        // 100 MiB + 64 MiB headroom = 164 MiB rounds up to the next 16 MiB = 176 MiB
         overrides.insert("var".to_string(), 100 * 1024 * 1024);
         let (bytes, _) = resolve_partition_size_bytes(&p, &overrides).unwrap();
-        assert_eq!(bytes, 112 * 1024 * 1024);
+        assert_eq!(bytes, 176 * 1024 * 1024);
     }
 
     #[test]
@@ -1594,7 +1609,10 @@ mod tests {
         let p = partition_with_size(None, None, Some("true"), Some("var"));
         let overrides = HashMap::new();
         let err = resolve_partition_size_bytes(&p, &overrides).unwrap_err();
-        assert!(err.contains("var"), "error should name the partition: {err}");
+        assert!(
+            err.contains("var"),
+            "error should name the partition: {err}"
+        );
         assert!(err.contains("--partition-size"));
     }
 
@@ -1613,7 +1631,11 @@ mod tests {
             partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
             partition_with_size(None, None, Some("true"), Some("var")),
         ]);
-        assert!(m.validate_partitions().is_ok(), "{:?}", m.validate_partitions());
+        assert!(
+            m.validate_partitions().is_ok(),
+            "{:?}",
+            m.validate_partitions()
+        );
     }
 
     #[test]
@@ -1705,7 +1727,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m.json");
         std::fs::write(&path, json).unwrap();
-        let m = Manifest::from_file(&path).expect("from_file should accept omitted size with expand=true on last partition");
+        let m = Manifest::from_file(&path)
+            .expect("from_file should accept omitted size with expand=true on last partition");
         let parts = &m.storage_devices["main"].partitions;
         assert_eq!(parts.len(), 2);
         assert!(parts[1].size.is_none());

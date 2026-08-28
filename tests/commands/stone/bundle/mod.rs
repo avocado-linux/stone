@@ -81,10 +81,10 @@ fn test_bundle_partition_size_override_applies_alignment() {
     assert_eq!(parts[0]["size_unit"], "bytes");
     assert_eq!(parts[0]["size"].as_u64().unwrap(), 256 * 1024 * 1024);
 
-    // Var partition is aligned up to 112 MiB.
+    // Var partition: 100 MiB image + 64 MiB headroom = 164 MiB, aligned up to 176 MiB.
     assert_eq!(parts[1]["name"], "var");
     assert_eq!(parts[1]["size_unit"], "bytes");
-    assert_eq!(parts[1]["size"].as_u64().unwrap(), 112 * 1024 * 1024);
+    assert_eq!(parts[1]["size"].as_u64().unwrap(), 176 * 1024 * 1024);
     assert_eq!(parts[1]["expand"], "true");
 
     // Offset of var follows boot.
@@ -134,8 +134,7 @@ fn test_bundle_missing_partition_size_override_errors() {
         .assert()
         .failure()
         .stdout(
-            predicates::str::contains("var")
-                .and(predicates::str::contains("--partition-size")),
+            predicates::str::contains("var").and(predicates::str::contains("--partition-size")),
         );
 }
 
