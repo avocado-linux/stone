@@ -520,6 +520,19 @@ fn build_fwup_with_env_vars(
     Ok(())
 }
 
+/// GPT attribute bit set on partitions the manifest marks `expand: "true"`.
+/// Bits 48-63 are reserved for the partition type's owner; 56 is ours.
+pub const GPT_ATTR_EXPAND_BIT: u64 = 1 << 56;
+
+/// The `flags` value a template writes for this partition, as a hex literal.
+pub fn partition_gpt_flags(partition: &crate::manifest::Partition) -> String {
+    let flags: u64 = match partition.expand.as_deref() {
+        Some("true") => GPT_ATTR_EXPAND_BIT,
+        _ => 0,
+    };
+    format!("{flags:#018x}")
+}
+
 fn calculate_avocado_env_vars(
     _device_name: &str,
     device: &crate::manifest::StorageDevice,
@@ -663,6 +676,16 @@ fn calculate_avocado_env_vars(
                     expand.to_string(),
                 );
             }
+            // GPT attribute flags for the partition. `expand: "true"` is also
+            // recorded ON THE DISK as attribute bit 56 (type-specific range), so
+            // the device can tell at boot that this partition was meant to fill
+            // its disk - an image written to a file and flashed later cannot be
+            // expanded at flash time, and nothing else on the device knows what
+            // the manifest said. Templates consume it as `flags = ${..._FLAGS}`.
+            env_vars.insert(
+                format!("AVOCADO_PARTITION_{name_upper}_FLAGS"),
+                partition_gpt_flags(partition).to_string(),
+            );
         }
 
         current_offset = partition_offset + partition_size;
@@ -919,6 +942,30 @@ fn execute_provision_script(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn expand_partitions_carry_gpt_attribute_56_in_their_flags() {
+        let mut p = crate::manifest::Partition {
+            name: Some("var".into()),
+            image: None,
+            partition_type: None,
+            partition_uuid: None,
+            offset: None,
+            offset_unit: None,
+            offset_redundant: None,
+            offset_redundant_unit: None,
+            size: None,
+            size_unit: None,
+            expand: Some("true".into()),
+            size_alignment: None,
+            size_alignment_unit: None,
+        };
+        assert_eq!(partition_gpt_flags(&p), "0x0100000000000000");
+        p.expand = Some("false".into());
+        assert_eq!(partition_gpt_flags(&p), "0x0000000000000000");
+        p.expand = None;
+        assert_eq!(partition_gpt_flags(&p), "0x0000000000000000");
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;
