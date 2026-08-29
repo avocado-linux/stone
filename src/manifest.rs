@@ -529,6 +529,25 @@ impl Manifest {
             let last_idx = device.partitions.len().saturating_sub(1);
             for (idx, p) in device.partitions.iter().enumerate() {
                 let label = p.name.clone().unwrap_or_else(|| format!("#{idx}"));
+                // `expand: "true"` leaves the build: it becomes a GPT attribute
+                // the device acts on by growing the partition to the end of its
+                // disk. That is only meaningful for the last partition, and the
+                // attribute is emitted per name (AVOCADO_PARTITION_<NAME>_FLAGS),
+                // so an unnamed one would silently never get it. fwup only
+                // catches the first case when a template wires `expand =` for
+                // the partition; the flags channel has no guard of its own.
+                if p.expand.as_deref() == Some("true") {
+                    if idx != last_idx {
+                        return Err(format!(
+                            "device '{dev_name}' partition '{label}' has expand=\"true\" but is not the last partition in the device's partition list; only the last partition can grow to the end of the disk"
+                        ));
+                    }
+                    if p.name.is_none() {
+                        return Err(format!(
+                            "device '{dev_name}' partition at index {idx} has expand=\"true\" but no name; a name is required so the grow marker (AVOCADO_PARTITION_<NAME>_FLAGS) and --partition-size overrides can target it"
+                        ));
+                    }
+                }
                 match (p.size.is_some(), p.size_unit.is_some()) {
                     (true, false) => {
                         return Err(format!(
@@ -549,11 +568,6 @@ impl Manifest {
                         if p.expand.as_deref() != Some("true") {
                             return Err(format!(
                                 "device '{dev_name}' partition '{label}' may only omit size if it has expand=\"true\""
-                            ));
-                        }
-                        if p.name.is_none() {
-                            return Err(format!(
-                                "device '{dev_name}' partition at index {idx} omits size and has no name; a name is required so a --partition-size override can target it"
                             ));
                         }
                     }
@@ -1847,6 +1861,32 @@ mod tests {
         ]);
         let err = m.validate_partitions().unwrap_err();
         assert!(err.contains("expand"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_partitions_sized_expand_on_non_last_fails() {
+        // An explicit size does not make a non-last expand legal: the grow
+        // marker would make the device extend var over data.
+        let m = manifest_with_partitions(vec![
+            partition_with_size(Some(256), Some("mebibytes"), Some("true"), Some("var")),
+            partition_with_size(Some(64), Some("mebibytes"), None, Some("data")),
+        ]);
+        let err = m.validate_partitions().unwrap_err();
+        assert!(err.contains("var"), "{err}");
+        assert!(err.contains("not the last partition"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_partitions_unnamed_expand_fails() {
+        // Without a name there is no AVOCADO_PARTITION_<NAME>_FLAGS to carry
+        // the marker, so the request would be silently dropped.
+        let m = manifest_with_partitions(vec![
+            partition_with_size(Some(256), Some("mebibytes"), None, Some("boot")),
+            partition_with_size(Some(512), Some("mebibytes"), Some("true"), None),
+        ]);
+        let err = m.validate_partitions().unwrap_err();
+        assert!(err.contains("no name"), "{err}");
+        assert!(err.contains("_FLAGS"), "{err}");
     }
 
     #[test]
