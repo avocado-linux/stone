@@ -10,6 +10,32 @@ Started at 2.3.0. For 2.2.0 and earlier, see the annotated tags and `git log`.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-30
+
+### Added
+
+- `provision` emits `AVOCADO_PARTITION_<NAME>_FLAGS` for every partition:
+  `0x0100000000000000` when the manifest says `expand: "true"`, `0` otherwise,
+  so the fwup templates can write it as the partition's GPT attribute flags. An
+  image written to a file and flashed later cannot be expanded at flash time, and
+  nothing else on the device knows what the manifest asked for; with the bit on
+  the partition the initramfs can grow it to the disk before `/var` is opened.
+  Bits 48-63 are the partition type owner's; 56 is Avocado's grow-to-disk mark.
+  It squats an unassigned bit in the Discoverable Partitions Specification's
+  type-owned range — the templates default `var` to the DPS `/var` GUID and
+  stone does not control the type.
+
+### Changed
+
+- **`expand: "true"` must be the last partition and must be named**, in every
+  form, not only when `size` is omitted. Now that the flag leaves the build as a
+  GPT attribute the device acts on, a sized expand partition followed by another
+  would have had the device grow it over its neighbour (fwup only catches that
+  when a template wires `expand =` for it), and an unnamed one silently got no
+  `AVOCADO_PARTITION_<NAME>_FLAGS` at all. Both are rejected at manifest
+  validation. This refuses manifests that parsed under 2.3.0, but such a manifest
+  was already not getting what it asked for; the coverage fixture was one.
+
 ## [2.3.0] - 2026-08-12
 
 ### Added
