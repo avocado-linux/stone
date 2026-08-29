@@ -507,7 +507,16 @@ fn build_fwup_with_env_vars(
 }
 
 /// GPT attribute bit set on partitions the manifest marks `expand: "true"`.
-/// Bits 48-63 are reserved for the partition type's owner; 56 is ours.
+///
+/// Bits 48-63 of the attributes are the partition *type's* to allocate, and
+/// stone neither sets nor checks the type - the template does, and
+/// meta-avocado's templates default var/rootfs/boot to Discoverable Partitions
+/// Specification GUIDs, whose 48-63 range belongs to the UAPI Group (it already
+/// uses 59 grow-file-system, 60 read-only, 63 no-auto). Bit 56 is unassigned
+/// there today, so this squats an unassigned bit in a namespace Avocado does
+/// not own. If the DPS ever allocates 56, either move the marker or give var an
+/// Avocado-owned type GUID in the templates; readers (avocado-var-grow) key on
+/// this constant only.
 pub const GPT_ATTR_EXPAND_BIT: u64 = 1 << 56;
 
 /// The `flags` value a template writes for this partition, as a hex literal.
@@ -616,12 +625,8 @@ fn calculate_avocado_env_vars(
             current_offset
         };
 
-        let partition_size = if partition.size.is_some() {
-            convert_to_blocks(
-                partition.size.unwrap(),
-                partition.size_unit.as_deref().unwrap(),
-                block_size,
-            )?
+        let partition_size = if let Some(size) = partition.size {
+            convert_to_blocks(size, partition.size_unit.as_deref().unwrap(), block_size)?
         } else {
             let (bytes, _) = resolve_partition_size_bytes(partition, partition_size_overrides)?;
             bytes / (block_size as u64)
@@ -667,14 +672,14 @@ fn calculate_avocado_env_vars(
                 );
             }
             // GPT attribute flags for the partition. `expand: "true"` is also
-            // recorded ON THE DISK as attribute bit 56 (type-specific range), so
+            // recorded ON THE DISK as attribute bit 56 (see GPT_ATTR_EXPAND_BIT), so
             // the device can tell at boot that this partition was meant to fill
             // its disk - an image written to a file and flashed later cannot be
             // expanded at flash time, and nothing else on the device knows what
             // the manifest said. Templates consume it as `flags = ${..._FLAGS}`.
             env_vars.insert(
                 format!("AVOCADO_PARTITION_{name_upper}_FLAGS"),
-                partition_gpt_flags(partition).to_string(),
+                partition_gpt_flags(partition),
             );
         }
 
