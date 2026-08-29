@@ -12,14 +12,35 @@ pub enum FatVariant {
     Fat32,
 }
 
+/// Unknown keys are refused rather than ignored. `files_append` is the first key
+/// here whose author is a delivery hook rather than a person, so a misspelling or
+/// a key nested one level off produced an image without the overlay, exited 0,
+/// and left a missing line in `describe-manifest` as the only signal - by which
+/// point the board has already booted without its device-tree overlay.
+///
+/// The attribute sits on the enum, not on the variant: `deny_unknown_fields` is a
+/// container attribute, and serde's derive knows to exempt the `type`
+/// discriminator that internal tagging puts in the same map.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum BuildArgs {
     #[serde(rename = "fat")]
     Fat {
         variant: FatVariant,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         files: Vec<FileEntry>,
+        /// Additional FAT files merged onto `files` at bundle time, deduplicated
+        /// by output path. Lets a delivery hook append a custom entry (e.g. a
+        /// device-tree overlay) without restating the base `files` list.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files_append: Vec<FileEntry>,
+        /// FAT volume label. `src/fat.rs` has carried the write for this all
+        /// along; there was no field here to plumb it from, so three shipped
+        /// manifests asking for `BOOT` produced images labelled with the `FATFS`
+        /// default instead - silently, which is what refusing unknown keys now
+        /// prevents.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     #[serde(rename = "fwup")]
     Fwup {
@@ -47,6 +68,22 @@ impl BuildArgs {
         match self {
             BuildArgs::Fat { files, .. } => files,
             _ => &[],
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn fat_files_append(&self) -> &[FileEntry] {
+        match self {
+            BuildArgs::Fat { files_append, .. } => files_append,
+            _ => &[],
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn fat_label(&self) -> Option<&str> {
+        match self {
+            BuildArgs::Fat { label, .. } => label.as_deref(),
+            _ => None,
         }
     }
 
@@ -190,7 +227,7 @@ pub struct StorageDevice {
     pub partitions: Vec<Partition>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Image {
     String(String),
@@ -205,6 +242,57 @@ pub enum Image {
         #[serde(skip_serializing_if = "Option::is_none")]
         uuid: Option<String>,
     },
+}
+
+/// The object form of [`Image`], as a named struct so it has a derived
+/// deserializer of its own to delegate to.
+///
+/// Exists only for [`Image`]'s `Deserialize` impl. Field drift is caught by the
+/// compiler: `Image::Object` is constructed exhaustively from this struct, so a
+/// field added to the variant fails to compile until it is added here too.
+#[derive(Deserialize)]
+struct ImageObject {
+    out: String,
+    #[serde(default)]
+    build_args: Option<BuildArgs>,
+    size: i64,
+    size_unit: String,
+    #[serde(default)]
+    block_size: Option<u32>,
+    #[serde(default)]
+    uuid: Option<String>,
+}
+
+/// Hand-written rather than `#[serde(untagged)]` so a bad object reports which
+/// key was wrong.
+///
+/// `untagged` discards every variant's error when all of them fail, so the
+/// `unknown field ... expected one of ...` that `deny_unknown_fields` produces
+/// inside `BuildArgs` never reached the operator - what surfaced was `data did
+/// not match any variant of untagged enum Image`, positioned at the end of the
+/// enclosing object rather than at the offending key. Refusing an unknown key is
+/// only useful if the message names it.
+///
+/// Dispatch here is unambiguous - a string is the `String` form, anything else
+/// must be the object form - so the object branch's own error can be propagated
+/// verbatim instead of guessed at.
+impl<'de> Deserialize<'de> for Image {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        if let Value::String(filename) = value {
+            return Ok(Image::String(filename));
+        }
+        let object: ImageObject =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(Image::Object {
+            out: object.out,
+            build_args: object.build_args,
+            size: object.size,
+            size_unit: object.size_unit,
+            block_size: object.block_size,
+            uuid: object.uuid,
+        })
+    }
 }
 
 impl Image {
@@ -241,6 +329,26 @@ impl Image {
         }
     }
 
+    /// Every FAT file this image contributes: base `files` with `files_append`
+    /// merged in, deduplicated by output path.
+    ///
+    /// [`Image::files`] returns only the base list, which is what left the
+    /// feature half-wired: each consumer that stages source files copied base
+    /// inputs and skipped appended ones, so `bundle` produced an `.aos` naming
+    /// a file it had not staged and `provision` failed a command later. Anything
+    /// that needs the files this image will actually contain wants this, not
+    /// `files()`.
+    ///
+    /// Returns the conflict error from [`merge_fat_files`] rather than
+    /// swallowing it, so a colliding append fails at the caller instead of
+    /// silently losing one of the two entries.
+    pub fn all_files(&self) -> Result<Vec<FileEntry>, String> {
+        match self.build_args() {
+            Some(args) => merge_fat_files(args.fat_files(), args.fat_files_append()),
+            None => Ok(self.files().to_vec()),
+        }
+    }
+
     pub fn size(&self) -> Option<i64> {
         match self {
             Image::String(_) => None,
@@ -270,7 +378,7 @@ impl Image {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum FileEntry {
     String(String),
@@ -287,6 +395,16 @@ impl FileEntry {
         match self {
             FileEntry::String(filename) => filename,
             FileEntry::Object { input, .. } => input,
+        }
+    }
+
+    /// Output path this entry produces on the target filesystem. A bare
+    /// `String` entry outputs under its own name; an `Object` outputs under
+    /// its explicit `out`.
+    pub fn output_name(&self) -> &str {
+        match self {
+            FileEntry::String(filename) => filename,
+            FileEntry::Object { output, .. } => output,
         }
     }
 }
@@ -387,24 +505,14 @@ pub fn resolve_partition_size_bytes(
 
 impl Manifest {
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            format!(
-                "[ERROR] Failed to read manifest file '{}': {}",
-                path.display(),
-                e
-            )
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read manifest file '{}': {}", path.display(), e))?;
 
-        let manifest: Self = serde_json::from_str(&content).map_err(|e| {
-            format!(
-                "[ERROR] Failed to parse manifest JSON '{}': {}",
-                path.display(),
-                e
-            )
-        })?;
+        let manifest: Self = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse manifest JSON '{}': {}", path.display(), e))?;
         manifest.validate_partitions().map_err(|e| {
             format!(
-                "[ERROR] Manifest '{}' has invalid partition layout: {}",
+                "Manifest '{}' has invalid partition layout: {}",
                 path.display(),
                 e
             )
@@ -499,14 +607,14 @@ impl Manifest {
 
         let base_content = std::fs::read_to_string(base_path).map_err(|e| {
             format!(
-                "[ERROR] Failed to read manifest file '{}': {}",
+                "Failed to read manifest file '{}': {}",
                 base_path.display(),
                 e
             )
         })?;
         let mut merged: Value = serde_json::from_str(&base_content).map_err(|e| {
             format!(
-                "[ERROR] Failed to parse manifest JSON '{}': {}",
+                "Failed to parse manifest JSON '{}': {}",
                 base_path.display(),
                 e
             )
@@ -515,14 +623,14 @@ impl Manifest {
         for overlay_path in overlay_paths {
             let overlay_content = std::fs::read_to_string(overlay_path).map_err(|e| {
                 format!(
-                    "[ERROR] Failed to read overlay file '{}': {}",
+                    "Failed to read overlay file '{}': {}",
                     overlay_path.display(),
                     e
                 )
             })?;
             let overlay_value: Value = serde_json::from_str(&overlay_content).map_err(|e| {
                 format!(
-                    "[ERROR] Failed to parse overlay JSON '{}': {}",
+                    "Failed to parse overlay JSON '{}': {}",
                     overlay_path.display(),
                     e
                 )
@@ -531,11 +639,11 @@ impl Manifest {
         }
 
         let merged_json = serde_json::to_string_pretty(&merged)
-            .map_err(|e| format!("[ERROR] Failed to serialize merged manifest: {}", e))?;
+            .map_err(|e| format!("Failed to serialize merged manifest: {}", e))?;
 
         let manifest: Self = serde_json::from_value(merged).map_err(|e| {
             format!(
-                "[ERROR] Merged manifest (base '{}' + {} overlay(s)) is invalid: {}",
+                "Merged manifest (base '{}' + {} overlay(s)) is invalid: {}",
                 base_path.display(),
                 overlay_paths.len(),
                 e
@@ -543,7 +651,7 @@ impl Manifest {
         })?;
         manifest.validate_partitions().map_err(|e| {
             format!(
-                "[ERROR] Merged manifest (base '{}' + {} overlay(s)) has invalid partition layout: {}",
+                "Merged manifest (base '{}' + {} overlay(s)) has invalid partition layout: {}",
                 base_path.display(),
                 overlay_paths.len(),
                 e
@@ -580,12 +688,12 @@ impl Provision {
                                 }
                             } else {
                                 return Err(format!(
-                                    "[ERROR] Named environment block '{env_name}' not found in provision.envs."
+                                    "Named environment block '{env_name}' not found in provision.envs."
                                 ));
                             }
                         } else {
                             return Err(format!(
-                                "[ERROR] Named environment block '{env_name}' referenced but no provision.envs defined."
+                                "Named environment block '{env_name}' referenced but no provision.envs defined."
                             ));
                         }
                     }
@@ -662,12 +770,39 @@ impl Provision {
 /// win on conflict). Arrays of named objects (elements with a `"name"` string
 /// field) are merged by matching names. All other values (scalars, unnamed
 /// arrays) in `overlay` replace `base` entirely.
+/// Concatenate `overlay` onto `base` when both are arrays, rather than
+/// replacing. Falls back to replacement for any other shape, matching
+/// [`deep_merge_json`]'s behaviour on a type mismatch.
+fn concat_json_array(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Array(base_arr), Value::Array(overlay_arr)) => base_arr.extend(overlay_arr),
+        (base, overlay) => *base = overlay,
+    }
+}
+
 pub fn deep_merge_json(base: &mut Value, overlay: Value) {
     match (base, overlay) {
         (Value::Object(base_map), Value::Object(overlay_map)) => {
             for (key, overlay_val) in overlay_map {
+                let is_append_list = key == "files_append";
                 let entry = base_map.entry(key).or_insert(Value::Null);
-                deep_merge_json(entry, overlay_val);
+                if is_append_list {
+                    // `files_append` is additive by definition - its purpose is
+                    // letting independent delivery hooks each contribute an
+                    // entry without restating the others. The generic array rule
+                    // below replaces the list unless every element carries a
+                    // "name", and FileEntry is {in,out}, so routing this through
+                    // it made the second overlay silently drop the first: the
+                    // key inherited the exact clobbering it exists to avoid.
+                    //
+                    // Concatenating rather than deduplicating here on purpose.
+                    // merge_fat_files owns that policy, and it distinguishes an
+                    // idempotent re-emit from a real collision; doing it twice,
+                    // in two places, is how the two would drift.
+                    concat_json_array(entry, overlay_val);
+                } else {
+                    deep_merge_json(entry, overlay_val);
+                }
             }
         }
         (Value::Array(base_arr), Value::Array(overlay_arr)) => {
@@ -699,6 +834,69 @@ pub fn deep_merge_json(base: &mut Value, overlay: Value) {
     }
 }
 
+/// Merge a base FAT `files` list with an additive `files_append` list, keyed by
+/// output path. An entry whose `{in,out}` is identical to one already present
+/// collapses to a single entry, so a regenerative delivery hook that re-emits
+/// the same entry on every rebuild is an idempotent no-op. Two entries that
+/// share an output path but resolve from different inputs are a hard error: a
+/// silent overwrite of a boot file (e.g. `overlays/foo.dtbo`) could brick the
+/// device, so the conflict must surface at build time.
+///
+/// Only appended entries are checked. Base `files` are carried through
+/// unexamined even when two of them share an output: such a manifest built
+/// before this feature existed (fatfs is last-write-wins) and turning it into a
+/// build failure here would be an unannounced break of manifests nobody
+/// touched. The dedup is a property of appending, which is what the doc above
+/// describes and what a delivery hook can actually trip.
+///
+/// Comparison is on [`fat_output_key`], not the raw string - see there for why
+/// exact equality was not enough.
+pub fn merge_fat_files(base: &[FileEntry], append: &[FileEntry]) -> Result<Vec<FileEntry>, String> {
+    let mut merged: Vec<FileEntry> = base.to_vec();
+    for entry in append {
+        if let Some(existing) = merged
+            .iter()
+            .find(|e| fat_output_key(e.output_name()) == fat_output_key(entry.output_name()))
+        {
+            if existing.input_filename() != entry.input_filename() {
+                return Err(format!(
+                    "Conflicting FAT file entries for output '{}': inputs '{}' and '{}' differ. \
+A custom overlay must not overwrite an existing boot file; give it a distinct output name.",
+                    entry.output_name(),
+                    existing.input_filename(),
+                    entry.input_filename(),
+                ));
+            }
+            // Identical {in,out}: idempotent, already present.
+            continue;
+        }
+        merged.push(entry.clone());
+    }
+    Ok(merged)
+}
+
+/// Normalize a FAT output path to the identity the filesystem will actually
+/// resolve it by.
+///
+/// Comparing output paths verbatim let a variant duplicate through the guard
+/// and into the image, where fatfs collapses it anyway: `eq_name` uppercases
+/// both sides, `find_entry` compares ignoring case, and `create_file` returns
+/// the existing entry *without truncating*. So `overlays/VC4.DTBO` written over
+/// `overlays/vc4.dtbo` produced one directory entry holding the overlay's bytes
+/// followed by whatever of the original ran past them - the brick this guard
+/// exists to prevent, reached through a spelling it did not check.
+///
+/// Uppercasing covers the case half. Dropping empty segments covers the path
+/// form half, so `./x`, `x` and `a//b` do not read as three distinct outputs.
+fn fat_output_key(output: &str) -> String {
+    output
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .map(|segment| segment.to_uppercase())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,6 +906,8 @@ mod tests {
         let fat_args = BuildArgs::Fat {
             variant: FatVariant::Fat32,
             files: vec![],
+            files_append: vec![],
+            label: None,
         };
 
         let serialized = serde_json::to_value(&fat_args).unwrap();
@@ -733,6 +933,8 @@ mod tests {
         let fat_args = BuildArgs::Fat {
             variant: FatVariant::Fat16,
             files: vec![],
+            files_append: vec![],
+            label: None,
         };
         assert_eq!(fat_args.build_type(), "fat");
 
@@ -749,6 +951,8 @@ mod tests {
             build_args: Some(BuildArgs::Fat {
                 variant: FatVariant::Fat32,
                 files: vec![],
+                files_append: vec![],
+                label: None,
             }),
             size: 100,
             size_unit: "megabytes".to_string(),
@@ -835,6 +1039,8 @@ mod tests {
                     output: "dest.bin".to_string(),
                 },
             ],
+            files_append: vec![],
+            label: None,
         };
 
         assert_eq!(fat_args.build_type(), "fat");
@@ -1757,5 +1963,289 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert!(parts[1].size.is_none());
         assert!(parts[1].size_unit.is_none());
+    }
+
+    // --- merge_fat_files (files_append) tests ---
+
+    fn fe_obj(input: &str, output: &str) -> FileEntry {
+        FileEntry::Object {
+            input: input.to_string(),
+            output: output.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_file_entry_output_name_string_and_object() {
+        // A bare String entry outputs under its own name (in == out).
+        assert_eq!(
+            FileEntry::String("a.dtbo".to_string()).output_name(),
+            "a.dtbo"
+        );
+        // An Object entry outputs under its explicit `out`.
+        assert_eq!(
+            fe_obj("a.dtbo", "overlays/a.dtbo").output_name(),
+            "overlays/a.dtbo"
+        );
+    }
+
+    #[test]
+    fn test_merge_fat_files_appends_new_entry() {
+        let base = vec![fe_obj("config.txt", "config.txt")];
+        let append = vec![fe_obj("bbproto.dtbo", "overlays/bbproto.dtbo")];
+        let merged = merge_fat_files(&base, &append).unwrap();
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].output_name(), "config.txt");
+        assert_eq!(merged[1].output_name(), "overlays/bbproto.dtbo");
+    }
+
+    #[test]
+    fn test_merge_fat_files_identical_entry_collapses() {
+        // A regenerative hook re-emits the same {in,out} on every rebuild; that
+        // must be an idempotent no-op, not a hard error (Fable C2).
+        let base = vec![fe_obj("bbproto.dtbo", "overlays/bbproto.dtbo")];
+        let append = vec![fe_obj("bbproto.dtbo", "overlays/bbproto.dtbo")];
+        let merged = merge_fat_files(&base, &append).unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].output_name(), "overlays/bbproto.dtbo");
+    }
+
+    #[test]
+    fn test_merge_fat_files_same_out_different_in_errors() {
+        // Same output path, different source = a real conflict (would silently
+        // overwrite a boot-critical file). Hard error (Fable C2 / Risk #5).
+        let base = vec![fe_obj("vc4-kms-v3d-pi5.dtbo", "overlays/foo.dtbo")];
+        let append = vec![fe_obj("user.dtbo", "overlays/foo.dtbo")];
+        let err = merge_fat_files(&base, &append).unwrap_err();
+        assert!(
+            err.contains("overlays/foo.dtbo"),
+            "error should name the colliding out: {err}"
+        );
+    }
+
+    #[test]
+    fn test_merge_fat_files_string_object_same_out_collapses() {
+        // String("f") and Object{in:"f", out:"f"} describe the same delivery.
+        let base = vec![FileEntry::String("f".to_string())];
+        let append = vec![fe_obj("f", "f")];
+        let merged = merge_fat_files(&base, &append).unwrap();
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn test_fat_build_args_parses_files_append() {
+        let json = r#"{"type":"fat","variant":"FAT32","files":[{"in":"config.txt","out":"config.txt"}],"files_append":[{"in":"bbproto.dtbo","out":"overlays/bbproto.dtbo"}]}"#;
+        let args: BuildArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.fat_files().len(), 1);
+        assert_eq!(args.fat_files_append().len(), 1);
+        assert_eq!(
+            args.fat_files_append()[0].output_name(),
+            "overlays/bbproto.dtbo"
+        );
+    }
+
+    #[test]
+    fn test_fat_build_args_files_append_defaults_empty() {
+        // A manifest without files_append still parses (backward compatible).
+        let json =
+            r#"{"type":"fat","variant":"FAT32","files":[{"in":"config.txt","out":"config.txt"}]}"#;
+        let args: BuildArgs = serde_json::from_str(json).unwrap();
+        assert!(args.fat_files_append().is_empty());
+    }
+
+    #[test]
+    fn two_overlays_each_appending_a_file_keep_both() {
+        // The composability case, and the reason files_append exists: two
+        // delivery hooks each contribute one overlay. Under the generic array
+        // rule the second replaced the first and one .dtbo vanished with no
+        // warning, so the collision guard never even saw it.
+        let mut base = serde_json::json!({
+            "build_args": {
+                "type": "fat",
+                "files_append": [{"in": "a.dtbo", "out": "overlays/a.dtbo"}]
+            }
+        });
+        let overlay = serde_json::json!({
+            "build_args": {
+                "files_append": [{"in": "b.dtbo", "out": "overlays/b.dtbo"}]
+            }
+        });
+
+        deep_merge_json(&mut base, overlay);
+
+        let appended = base["build_args"]["files_append"].as_array().unwrap();
+        assert_eq!(appended.len(), 2, "both overlays must survive the merge");
+        assert_eq!(appended[0]["in"], "a.dtbo");
+        assert_eq!(appended[1]["in"], "b.dtbo");
+    }
+
+    #[test]
+    fn an_overlay_still_replaces_the_base_files_list() {
+        // The other half of the same decision. `files` keeps replace semantics
+        // - that is precisely why files_append had to exist - so appending must
+        // not leak into it.
+        let mut base = serde_json::json!({
+            "build_args": {"files": [{"in": "old.bin", "out": "old.bin"}]}
+        });
+        let overlay = serde_json::json!({
+            "build_args": {"files": [{"in": "new.bin", "out": "new.bin"}]}
+        });
+
+        deep_merge_json(&mut base, overlay);
+
+        let files = base["build_args"]["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["in"], "new.bin");
+    }
+
+    #[test]
+    fn a_case_variant_output_is_a_collision_not_a_second_file() {
+        // fatfs resolves names case-insensitively and create_file does not
+        // truncate, so these two would have become one entry holding the
+        // overlay's bytes followed by the tail of the original.
+        let base = vec![FileEntry::Object {
+            input: "vc4-kms-v3d-pi5.dtbo".to_string(),
+            output: "overlays/vc4-kms-v3d-pi5.dtbo".to_string(),
+        }];
+        let append = vec![FileEntry::Object {
+            input: "user.dtbo".to_string(),
+            output: "overlays/VC4-KMS-V3D-PI5.DTBO".to_string(),
+        }];
+
+        let err = merge_fat_files(&base, &append).unwrap_err();
+        assert!(err.contains("Conflicting FAT file entries"), "{err}");
+        assert!(
+            !err.starts_with("[ERROR]"),
+            "the caller's log_error adds that prefix; carrying it here printed it twice: {err}"
+        );
+    }
+
+    #[test]
+    fn path_form_variants_of_one_output_collide() {
+        let base = vec![FileEntry::Object {
+            input: "a.bin".to_string(),
+            output: "./boot//x.bin".to_string(),
+        }];
+        let append = vec![FileEntry::Object {
+            input: "b.bin".to_string(),
+            output: "boot/x.bin".to_string(),
+        }];
+
+        assert!(merge_fat_files(&base, &append).is_err());
+    }
+
+    #[test]
+    fn duplicate_outputs_within_base_files_are_not_a_collision() {
+        // Pre-existing manifests did this and built; the dedup is a property of
+        // appending, so turning base-vs-base into a hard error would break
+        // manifests nobody edited.
+        let base = vec![
+            FileEntry::Object {
+                input: "a.bin".to_string(),
+                output: "shared".to_string(),
+            },
+            FileEntry::Object {
+                input: "b.bin".to_string(),
+                output: "shared".to_string(),
+            },
+        ];
+
+        let merged = merge_fat_files(&base, &[]).unwrap();
+        assert_eq!(merged.len(), 2, "base entries pass through unexamined");
+    }
+
+    // --- Image deserialization diagnostics ---
+
+    const IMAGE_WITH_BAD_BUILD_ARGS: &str = r#"{
+        "out": "boot.img", "size": 64, "size_unit": "mebibytes",
+        "build_args": {"type": "fat", "variant": "FAT32", "file_append": []}
+    }"#;
+
+    #[test]
+    fn an_unknown_build_args_key_surfaces_through_image() {
+        // `deny_unknown_fields` on BuildArgs produces a message naming the key and
+        // listing the valid ones. Under `#[serde(untagged)]` on Image, serde threw it
+        // away and reported "did not match any variant of untagged enum Image", so the
+        // refusal told the operator nothing about what to change. This asserts the
+        // inner message reaches the caller.
+        let err = serde_json::from_str::<Image>(IMAGE_WITH_BAD_BUILD_ARGS).unwrap_err();
+        let err = err.to_string();
+        assert!(err.contains("file_append"), "must name the bad key: {err}");
+        assert!(
+            err.contains("files_append"),
+            "must list the valid keys so the fix is obvious: {err}"
+        );
+        assert!(
+            !err.contains("did not match any variant"),
+            "the untagged fallback message is what this impl exists to avoid: {err}"
+        );
+    }
+
+    #[test]
+    fn a_bad_image_object_does_not_report_as_a_string_image() {
+        // The failure mode of dispatching by trial: a non-string value must be judged
+        // as an object and report the object's error, never "expected a string".
+        let err = serde_json::from_str::<Image>(IMAGE_WITH_BAD_BUILD_ARGS)
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("expected a string"), "{err}");
+    }
+
+    #[test]
+    fn both_image_forms_still_deserialize() {
+        // Backward compatibility for the hand-written impl: the bare-filename form and
+        // the object form must both parse exactly as they did under `untagged`.
+        let s: Image = serde_json::from_str(r#""avocado-image-var.btrfs""#).unwrap();
+        assert!(matches!(s, Image::String(ref f) if f == "avocado-image-var.btrfs"));
+
+        let o: Image = serde_json::from_str(
+            r#"{"out": "boot.img", "size": 64, "size_unit": "mebibytes",
+                "block_size": 512, "uuid": "abcd"}"#,
+        )
+        .unwrap();
+        assert_eq!(o.out(), "boot.img");
+        assert_eq!(o.size(), Some(64));
+        assert_eq!(o.size_unit(), Some("mebibytes"));
+        assert_eq!(o.block_size(), Some(512));
+        assert_eq!(o.uuid(), Some("abcd"));
+        assert!(o.build_args().is_none(), "build_args stays optional");
+    }
+
+    #[test]
+    fn an_image_object_round_trips_through_serde() {
+        // Serialize is still derived while Deserialize is hand-written; this pins the
+        // two to the same field names, which a mismatch would otherwise hide until a
+        // merged manifest failed to re-read.
+        let original: Image = serde_json::from_str(
+            r#"{"out": "boot.img", "size": 64, "size_unit": "mebibytes",
+                "build_args": {"type": "fat", "variant": "FAT32",
+                               "label": "BOOT",
+                               "files_append": [{"in": "a.dtbo", "out": "overlays/a.dtbo"}]}}"#,
+        )
+        .unwrap();
+        let reparsed: Image = serde_json::from_str(&serde_json::to_string(&original).unwrap())
+            .expect("what Serialize writes, Deserialize must accept");
+        assert_eq!(reparsed.all_files().unwrap().len(), 1);
+        assert_eq!(reparsed.build_args().unwrap().fat_label(), Some("BOOT"));
+    }
+
+    #[test]
+    fn a_missing_required_image_field_names_that_field() {
+        let err = serde_json::from_str::<Image>(r#"{"out": "boot.img", "size": 64}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("size_unit"), "{err}");
+        assert!(!err.contains("did not match any variant"), "{err}");
+    }
+
+    #[test]
+    fn manifest_parse_errors_carry_no_error_prefix() {
+        // `main` routes every Err through `log_error`, which adds `[ERROR]`; a literal
+        // one here printed it twice. Harmless until deny_unknown_fields made ordinary
+        // typos take this path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        let err = Manifest::from_file(&path).unwrap_err();
+        assert!(!err.contains("[ERROR]"), "log_error owns the prefix: {err}");
     }
 }

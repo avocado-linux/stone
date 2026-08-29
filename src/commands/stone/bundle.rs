@@ -1,7 +1,8 @@
 use crate::fat;
 use crate::log::*;
 use crate::manifest::{
-    BuildArgs, FatVariant, FileEntry, Image, Manifest, resolve_partition_size_bytes, to_bytes,
+    BuildArgs, FatVariant, FileEntry, Image, Manifest, merge_fat_files,
+    resolve_partition_size_bytes, to_bytes,
 };
 use clap::Args;
 use sha2::{Digest, Sha256};
@@ -322,8 +323,12 @@ fn copy_manifest_inputs(
             {
                 copy_file(&src, &build_dir.join(template), verbose)?;
             }
-            // Copy FAT source files (e.g., initramfs, bzImage) so provision can rebuild FAT images
-            for file_entry in image.files() {
+            // Copy FAT source files (e.g., initramfs, bzImage) so provision can
+            // rebuild FAT images. all_files() rather than files(): an appended
+            // entry names a source that provision needs staged just as much as a
+            // base one, and skipping it produced a bundle that referenced a file
+            // it had not copied.
+            for file_entry in &image.all_files()? {
                 let input_filename = file_entry.input_filename();
                 if let Some(src) = find_file_in_dirs(input_filename, input_dirs) {
                     let dest = build_dir.join(input_filename);
@@ -372,7 +377,13 @@ fn build_all_images(
             match image {
                 Image::Object {
                     out,
-                    build_args: Some(BuildArgs::Fat { variant, files }),
+                    build_args:
+                        Some(BuildArgs::Fat {
+                            variant,
+                            files,
+                            files_append,
+                            label,
+                        }),
                     size,
                     size_unit,
                     ..
@@ -386,7 +397,9 @@ fn build_all_images(
                         FatVariant::Fat32 => fat::FatType::Fat32,
                     };
 
-                    let fat_manifest = create_fat_manifest_with_resolved_paths(files, input_dirs)?;
+                    let merged_files = merge_fat_files(files, files_append)?;
+                    let fat_manifest =
+                        create_fat_manifest_with_resolved_paths(&merged_files, input_dirs)?;
                     let temp_manifest_path =
                         build_dir.join(format!("temp_manifest_{image_name}.json"));
                     let manifest_json = serde_json::to_string_pretty(&fat_manifest)
@@ -399,13 +412,16 @@ fn build_all_images(
                     let output_in_build = build_dir.join(out);
                     let base_path = PathBuf::from(".");
 
-                    let options = fat::FatImageOptions::new()
+                    let mut options = fat::FatImageOptions::new()
                         .with_manifest_path(&temp_manifest_path)
                         .with_base_path(&base_path)
                         .with_output_path(&output_in_images)
                         .with_size_mebibytes(size_mb)
                         .with_fat_type(fat_type)
                         .with_verbose(verbose);
+                    if let Some(label) = label {
+                        options = options.with_label(label.as_str());
+                    }
 
                     fat::create_fat_image(&options)?;
                     let _ = fs::remove_file(&temp_manifest_path);

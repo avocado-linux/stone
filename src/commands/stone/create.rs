@@ -281,10 +281,12 @@ fn process_image(
         }
     }
 
-    // If the image has files defined, copy those individual files
-    let files = image.files();
+    // If the image has files defined, copy those individual files.
+    // all_files() so an appended entry is copied rather than silently omitted -
+    // create printed "Created." either way, unlike a missing base input.
+    let files = image.all_files()?;
     if !files.is_empty() {
-        for file_entry in files {
+        for file_entry in &files {
             if let Err(e) = process_file_entry(file_entry, input_dirs, output_dir, verbose) {
                 return Err(format!(
                     "Failed to process file in image '{image_name}': {e}"

@@ -144,10 +144,24 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
                     output.push_str("    Build Args:\n");
                     output.push_str(&format!("      type: {}\n", build_args.build_type()));
                     match build_args {
-                        crate::manifest::BuildArgs::Fat { variant, files } => {
+                        crate::manifest::BuildArgs::Fat {
+                            variant,
+                            files,
+                            files_append,
+                            label,
+                        } => {
                             output.push_str(&format!("      variant: {variant:?}\n"));
+                            if let Some(label) = label {
+                                output.push_str(&format!("      label: \"{label}\"\n"));
+                            }
                             if !files.is_empty() {
                                 output.push_str(&format!("      files: {} file(s)\n", files.len()));
+                            }
+                            if !files_append.is_empty() {
+                                output.push_str(&format!(
+                                    "      files_append: {} file(s)\n",
+                                    files_append.len()
+                                ));
                             }
                         }
                         crate::manifest::BuildArgs::Fwup { template } => {
@@ -157,19 +171,16 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
                 }
             }
 
-            // Show files from build_args for fat builds, otherwise from image
-            let files = if let Some(build_args) = image.build_args() {
-                match build_args {
-                    crate::manifest::BuildArgs::Fat { files, .. } => files.as_slice(),
-                    _ => image.files(),
-                }
-            } else {
-                image.files()
-            };
+            // Base files plus appended ones. A misplaced or misspelled
+            // files_append key is silently ignored, so this listing is the
+            // operator's only confirmation an append landed - and it used to
+            // print a count that included appended entries above a list that
+            // named none of them.
+            let files = image.all_files()?;
 
             if !files.is_empty() {
                 output.push_str(&format!("    Files ({}):\n", files.len()));
-                for file_entry in files {
+                for file_entry in &files {
                     match file_entry {
                         crate::manifest::FileEntry::String(filename) => {
                             output.push_str(&format!("      {filename}\n"));
@@ -221,10 +232,22 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
             output.push_str("\nStorage Device Build Args:\n");
             output.push_str(&format!("  type: {}\n", build_args.build_type()));
             match build_args {
-                crate::manifest::BuildArgs::Fat { variant, files } => {
+                crate::manifest::BuildArgs::Fat {
+                    variant,
+                    files,
+                    files_append,
+                    label,
+                } => {
                     output.push_str(&format!("  variant: {variant:?}\n"));
+                    if let Some(label) = label {
+                        output.push_str(&format!("  label: \"{label}\"\n"));
+                    }
                     if !files.is_empty() {
                         output.push_str(&format!("  files: {} file(s)\n", files.len()));
+                    }
+                    if !files_append.is_empty() {
+                        output
+                            .push_str(&format!("  files_append: {} file(s)\n", files_append.len()));
                     }
                 }
                 crate::manifest::BuildArgs::Fwup { template } => {

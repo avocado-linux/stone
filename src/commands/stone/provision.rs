@@ -2,7 +2,8 @@ use crate::commands::stone::bundle::parse_partition_size_overrides;
 use crate::fat;
 use crate::log::*;
 use crate::manifest::{
-    BuildArgs, FatVariant, FileEntry, Image, Manifest, resolve_partition_size_bytes,
+    BuildArgs, FatVariant, FileEntry, Image, Manifest, merge_fat_files,
+    resolve_partition_size_bytes,
 };
 use clap::Args;
 
@@ -204,17 +205,26 @@ fn build_image(
             size_unit,
             ..
         } => match build_args {
-            BuildArgs::Fat { variant, files } => build_fat_image(FatImageParams {
-                image_name,
-                out,
+            BuildArgs::Fat {
                 variant,
                 files,
-                size,
-                size_unit,
-                input_dirs,
-                build_dir,
-                verbose,
-            }),
+                files_append,
+                label,
+            } => {
+                let merged_files = merge_fat_files(files, files_append)?;
+                build_fat_image(FatImageParams {
+                    image_name,
+                    out,
+                    variant,
+                    files: &merged_files,
+                    size,
+                    size_unit,
+                    input_dirs,
+                    build_dir,
+                    verbose,
+                    label: label.as_deref(),
+                })
+            }
             BuildArgs::Fwup { template } => {
                 build_fwup_image(image_name, image, template, input_dirs, build_dir, verbose)
             }
@@ -243,6 +253,7 @@ struct FatImageParams<'a> {
     input_dirs: &'a [PathBuf],
     build_dir: &'a Path,
     verbose: bool,
+    label: Option<&'a str>,
 }
 
 fn build_fat_image(params: FatImageParams) -> Result<(), String> {
@@ -279,13 +290,16 @@ fn build_fat_image(params: FatImageParams) -> Result<(), String> {
     let base_path = PathBuf::from(".");
 
     // Create FAT image options
-    let options = fat::FatImageOptions::new()
+    let mut options = fat::FatImageOptions::new()
         .with_manifest_path(&temp_manifest_path)
         .with_base_path(&base_path)
         .with_output_path(&output_path)
         .with_size_mebibytes(size_mb)
         .with_fat_type(fat_type)
         .with_verbose(params.verbose);
+    if let Some(label) = params.label {
+        options = options.with_label(label);
+    }
 
     // Build the FAT image
     let result = fat::create_fat_image(&options);
@@ -803,9 +817,7 @@ fn execute_provision_with_profile(
         manifest
             .get_provision_default()
             .map(|s| s.to_string())
-            .ok_or_else(|| {
-                "[ERROR] No provision profile specified and no default found.".to_string()
-            })
+            .ok_or_else(|| "No provision profile specified and no default found.".to_string())
     })?;
 
     if verbose {
@@ -815,7 +827,7 @@ fn execute_provision_with_profile(
     // Get the specific profile
     let profile = manifest
         .get_provision_profile(&profile_name)
-        .ok_or_else(|| format!("[ERROR] Provision profile '{profile_name}' not found."))?;
+        .ok_or_else(|| format!("Provision profile '{profile_name}' not found."))?;
 
     // Resolve environment variables from the profile
     let resolved_envs = provision.resolve_envs(profile)?;
@@ -851,7 +863,7 @@ fn execute_provision_script(
     additional_envs: &HashMap<String, String>,
 ) -> Result<(), String> {
     let provision_path = find_file_in_dirs(provision_file, input_dirs).ok_or_else(|| {
-        format!("[ERROR] Provision file '{provision_file}' not found in any input directory.")
+        format!("Provision file '{provision_file}' not found in any input directory.")
     })?;
 
     // Use the directory containing the manifest as the working directory
@@ -885,13 +897,13 @@ fn execute_provision_script(
     // Set default environment variables for the provision script
     let manifest_path_canonical = manifest_path
         .canonicalize()
-        .map_err(|e| format!("[ERROR] Failed to resolve manifest path: {e}"))?;
+        .map_err(|e| format!("Failed to resolve manifest path: {e}"))?;
     let build_dir_canonical = build_dir
         .canonicalize()
-        .map_err(|e| format!("[ERROR] Failed to resolve build directory path: {e}"))?;
+        .map_err(|e| format!("Failed to resolve build directory path: {e}"))?;
     let input_dir_canonical = input_dir
         .canonicalize()
-        .map_err(|e| format!("[ERROR] Failed to resolve input directory path: {e}"))?;
+        .map_err(|e| format!("Failed to resolve input directory path: {e}"))?;
     command.env("AVOCADO_STONE_MANIFEST", manifest_path_canonical);
     command.env("AVOCADO_STONE_BUILD_DIR", build_dir_canonical);
     command.env("AVOCADO_STONE_DATA_DIR", input_dir_canonical);
