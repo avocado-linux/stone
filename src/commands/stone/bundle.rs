@@ -702,6 +702,14 @@ fn generate_bundle_json(
                 .map_err(|e| format!("Failed to serialize rollback: {e}"))?;
         }
 
+        // The commit actions the device runs after a verified boot (e.g.
+        // `avocado-bls bless`). Dropping them here is what left every deployed
+        // entry counting down forever on the ESP.
+        if let Some(commit) = &update.commit {
+            update_section["commit"] = serde_json::to_value(commit.as_vec())
+                .map_err(|e| format!("Failed to serialize commit: {e}"))?;
+        }
+
         bundle["update"] = update_section;
     }
 
@@ -965,4 +973,53 @@ fn copy_file(input_path: &Path, output_path: &Path, verbose: bool) -> Result<(),
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod commit_tests {
+    use super::*;
+
+    /// Regression: the manifest's `update.commit` must reach bundle.json. It was
+    /// silently dropped -- the `Update` struct had no `commit` field, so serde
+    /// discarded it and the generator only emitted activate/rollback. On the
+    /// device that meant `avocado-bls bless` never ran: every deployed sd-boot
+    /// entry stayed tries-suffixed, so every boot re-renamed it on the ESP FAT
+    /// (churn that faulted the RB3 Gen 2's UEFI) and a healthy OS still rolled
+    /// back once its tries ran out.
+    #[test]
+    fn commit_actions_are_carried_into_bundle_json() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "runtime": { "platform": "avocado-rb3gen2", "architecture": "arm64" },
+            "storage_devices": {},
+            "update": {
+                "slot_detection": { "type": "command", "command": ["avocado-bls", "current-slot"] },
+                "os_artifacts": {},
+                "activate": [],
+                "rollback": [{ "type": "command", "command": ["avocado-bls", "demote", "{new_slot}"] }],
+                "commit":   [{ "type": "command", "command": ["avocado-bls", "bless"] }]
+            }
+        }))
+        .expect("minimal manifest with commit");
+        let bundle =
+            generate_bundle_json(&manifest, &[], "os-build-id", None, &HashMap::new()).unwrap();
+        let commit = &bundle["update"]["commit"];
+        assert!(
+            commit.is_array(),
+            "commit missing from bundle.json: {bundle}"
+        );
+        assert_eq!(commit[0]["command"][0], "avocado-bls");
+        assert_eq!(commit[0]["command"][1], "bless");
+        assert_eq!(bundle["update"]["rollback"][0]["command"][1], "demote");
+    }
+
+    #[test]
+    fn absent_commit_emits_no_key() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "runtime": { "platform": "p", "architecture": "arm64" },
+            "storage_devices": {},
+            "update": { "slot_detection": { "type": "command", "command": ["x"] }, "os_artifacts": {}, "activate": [] }
+        })).unwrap();
+        let bundle = generate_bundle_json(&manifest, &[], "b", None, &HashMap::new()).unwrap();
+        assert!(bundle["update"].get("commit").is_none(), "{bundle}");
+    }
 }
