@@ -10,6 +10,19 @@ Started at 2.3.0. For 2.2.0 and earlier, see the annotated tags and `git log`.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-14
+
+### Fixed
+
+- `bundle` now carries the manifest's `update.commit` actions into
+  `bundle.json`. The `Update` struct had no `commit` field, so serde discarded
+  it on parse and the generator emitted only `activate` and `rollback`. The
+  device's pending-update marker was therefore built without the commit step,
+  so the post-boot finalize (`avocado-bls bless` on systemd-boot A/B, which
+  renames the tries-suffixed UKI back to its plain name) never ran: every
+  deployed entry stayed counting down, was re-renamed on the ESP every boot,
+  and a healthy OS still rolled back once its tries reached zero.
+
 ## [2.4.0] - 2026-08-30
 
 ### Added
@@ -92,5 +105,7 @@ Started at 2.3.0. For 2.2.0 and earlier, see the annotated tags and `git log`.
   silently ignored — `expnd` for `expand` yields a non-expanding partition with no
   warning.
 
-[Unreleased]: https://github.com/avocado-linux/stone/compare/2.3.0...HEAD
+[Unreleased]: https://github.com/avocado-linux/stone/compare/2.5.0...HEAD
+[2.5.0]: https://github.com/avocado-linux/stone/compare/2.4.0...2.5.0
+[2.4.0]: https://github.com/avocado-linux/stone/compare/2.3.0...2.4.0
 [2.3.0]: https://github.com/avocado-linux/stone/compare/2.2.0...2.3.0
