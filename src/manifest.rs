@@ -114,6 +114,15 @@ pub struct Update {
     pub activate: SlotActions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback: Option<SlotActions>,
+    /// Actions run once, on the device, after the new OS has booted and its
+    /// identity is verified: they finalize the update so the loader stops
+    /// counting the entry down. On sd-boot A/B that is `avocado-bls bless`,
+    /// which renames the tries-suffixed entry back to its plain name. Without
+    /// this in the bundle the device never blesses, so every boot re-renames
+    /// the entry on the ESP -- churn that eventually faults the firmware's FAT
+    /// writer -- and a healthy OS still rolls back when its tries run out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<SlotActions>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
