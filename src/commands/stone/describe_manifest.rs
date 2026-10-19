@@ -67,13 +67,9 @@ fn format_offset_display(
     offset_unit: Option<&String>,
 ) -> Result<String, String> {
     match (offset, offset_unit) {
-        (Some(offset_val), Some(unit)) => match unit.as_str() {
-            "bytes" => Ok(format!("{offset_val} bytes")),
-            "blocks" => Ok(format!("{offset_val} blocks")),
-            _ => Err(format!(
-                "Unknown offset unit '{unit}'. Supported units: bytes, blocks."
-            )),
-        },
+        // Offsets take the same units as sizes; provision and bundle accept
+        // all of them, so the display must too.
+        (Some(offset_val), Some(unit)) => format_size(offset_val, unit),
         (Some(offset_val), None) => Ok(format!("{offset_val}")),
         _ => Ok("-".to_string()),
     }
@@ -263,4 +259,29 @@ fn describe_manifest(manifest: &Manifest) -> Result<(), String> {
 
     println!("{output}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offsets_take_the_same_units_as_sizes() {
+        let kib = "kibibytes".to_string();
+        assert_eq!(
+            format_offset_display(Some(32), Some(&kib)).unwrap(),
+            "32 KiB"
+        );
+        let mib = "mebibytes".to_string();
+        assert_eq!(format_offset_display(Some(8), Some(&mib)).unwrap(), "8 MiB");
+        let blocks = "blocks".to_string();
+        assert_eq!(
+            format_offset_display(Some(64), Some(&blocks)).unwrap(),
+            "64 blocks"
+        );
+        assert_eq!(format_offset_display(Some(7), None).unwrap(), "7");
+        assert_eq!(format_offset_display(None, None).unwrap(), "-");
+        let bad = "furlongs".to_string();
+        assert!(format_offset_display(Some(1), Some(&bad)).is_err());
+    }
 }
