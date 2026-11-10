@@ -10,6 +10,37 @@ use serde::{Deserialize, Serialize};
 trait ReadWriteSeek: Read + Write + Seek {}
 impl<T: Read + Write + Seek> ReadWriteSeek for T {}
 
+/// Stamps every entry with the FAT epoch (1980-01-01 00:00). fatfs's default
+/// provider uses the wall clock, so identical contents built a minute apart
+/// made different images, and a device comparing bundle hashes took an
+/// unchanged boot image for an OS update.
+#[derive(Debug)]
+struct FatEpoch;
+
+impl fatfs::TimeProvider for FatEpoch {
+    fn get_current_date(&self) -> fatfs::Date {
+        fatfs::Date {
+            year: 1980,
+            month: 1,
+            day: 1,
+        }
+    }
+
+    fn get_current_date_time(&self) -> fatfs::DateTime {
+        fatfs::DateTime {
+            date: self.get_current_date(),
+            time: fatfs::Time {
+                hour: 0,
+                min: 0,
+                sec: 0,
+                millis: 0,
+            },
+        }
+    }
+}
+
+static FAT_EPOCH: FatEpoch = FatEpoch;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum FatType {
     #[allow(dead_code)]
@@ -263,8 +294,11 @@ fn generate_fat_image(
         .map_err(|e| format!("Failed to seek in image file: {e}"))?;
 
     // Create filesystem
-    let fs = fatfs::FileSystem::new(boxed_file, fatfs::FsOptions::new())
-        .map_err(|e| format!("Failed to create filesystem: {e}"))?;
+    let fs = fatfs::FileSystem::new(
+        boxed_file,
+        fatfs::FsOptions::new().time_provider(&FAT_EPOCH),
+    )
+    .map_err(|e| format!("Failed to create filesystem: {e}"))?;
     let root_dir = fs.root_dir();
 
     // Create directories first
@@ -366,4 +400,43 @@ fn add_file_to_fat(
         .map_err(|e| format!("Failed to write to file '{file_name}': {e}"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The same inputs build the same bytes, however far apart the builds run.
+    #[test]
+    fn rebuilding_the_same_contents_gives_the_same_image() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src/overlays")).unwrap();
+        fs::write(dir.path().join("src/Image"), b"kernel").unwrap();
+        fs::write(dir.path().join("src/overlays/a.dtbo"), b"overlay").unwrap();
+        let manifest = dir.path().join("manifest.json");
+        fs::write(
+            &manifest,
+            r#"{"directories": ["overlays"], "files": [
+                {"filename": "Image"},
+                {"filename": "overlays/a.dtbo"}
+            ]}"#,
+        )
+        .unwrap();
+
+        let build = |name: &str| {
+            let out = dir.path().join(name);
+            create_fat_image(
+                &FatImageOptions::new()
+                    .with_manifest_path(&manifest)
+                    .with_base_path(dir.path().join("src"))
+                    .with_output_path(&out),
+            )
+            .unwrap();
+            fs::read(out).unwrap()
+        };
+        let first = build("a.img");
+        // FAT keeps creation times to 10 ms; wait well past that.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(first == build("b.img"), "images differ");
+    }
 }
