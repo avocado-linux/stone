@@ -98,7 +98,7 @@ impl BuildArgs {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Manifest {
     pub runtime: Runtime,
-    pub storage_devices: std::collections::HashMap<String, StorageDevice>,
+    pub storage_devices: std::collections::BTreeMap<String, StorageDevice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provision: Option<Provision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,7 +110,7 @@ pub struct Manifest {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Update {
     pub slot_detection: SlotDetection,
-    pub os_artifacts: HashMap<String, OsArtifactRef>,
+    pub os_artifacts: std::collections::BTreeMap<String, OsArtifactRef>,
     pub activate: SlotActions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback: Option<SlotActions>,
@@ -232,7 +232,7 @@ pub struct StorageDevice {
     pub block_size: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uuid: Option<String>,
-    pub images: std::collections::HashMap<String, Image>,
+    pub images: std::collections::BTreeMap<String, Image>,
     pub partitions: Vec<Partition>,
 }
 
@@ -1718,7 +1718,7 @@ mod tests {
     }
 
     fn manifest_with_partitions(partitions: Vec<Partition>) -> Manifest {
-        let mut storage_devices = HashMap::new();
+        let mut storage_devices = std::collections::BTreeMap::new();
         storage_devices.insert(
             "main".to_string(),
             StorageDevice {
@@ -1727,7 +1727,7 @@ mod tests {
                 devpath: "/dev/sda".to_string(),
                 block_size: None,
                 uuid: None,
-                images: HashMap::new(),
+                images: std::collections::BTreeMap::new(),
                 partitions,
             },
         );

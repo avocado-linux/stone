@@ -182,3 +182,66 @@ fn test_bundle_omitted_size_on_non_last_partition_fails_validation() {
         .failure()
         .stdout(predicates::str::contains("last partition"));
 }
+
+/// Two bundles of identical inputs must be byte-identical. The device decides
+/// whether a release carries an OS update by comparing the sha256 of the whole
+/// `.aos`, so any build-time noise (tar header mtimes, uid/gid, artifact order)
+/// makes every app-only release write the inactive slot and reboot.
+#[test]
+fn test_bundle_is_byte_reproducible() {
+    let names = ["boot", "kernel", "rootfs", "dtb", "initrd", "firmware"];
+    let images: serde_json::Map<String, serde_json::Value> = names
+        .iter()
+        .map(|n| (n.to_string(), format!("{n}.img").into()))
+        .collect();
+    let os_artifacts: serde_json::Map<String, serde_json::Value> = names
+        .iter()
+        .map(|n| {
+            let v = serde_json::json!({"image_key": n, "slot_partitions": [format!("{n}_a"), format!("{n}_b")]});
+            (n.to_string(), v)
+        })
+        .collect();
+    let manifest = serde_json::json!({
+        "runtime": {"platform": "linux", "architecture": "x86_64"},
+        "storage_devices": {"main": {"out": "disk.img", "devpath": "/dev/sda", "images": images, "partitions": []}},
+        "update": {
+            "slot_detection": {"type": "command", "command": ["x"]},
+            "os_artifacts": os_artifacts,
+            "activate": []
+        }
+    });
+
+    let bundle = |dir: &std::path::Path| -> Vec<u8> {
+        // Fresh inputs every run, so every file gets a new mtime.
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("os-release"), OS_RELEASE).unwrap();
+        fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
+        for n in names {
+            fs::write(dir.join(format!("{n}.img")), format!("{n} payload")).unwrap();
+        }
+        let output = dir.join("os-bundle.aos");
+        Command::cargo_bin("stone")
+            .unwrap()
+            .args([
+                "bundle",
+                "-m",
+                &dir.join("manifest.json").to_string_lossy(),
+                "--os-release",
+                &dir.join("os-release").to_string_lossy(),
+                "-i",
+                &dir.to_string_lossy(),
+                "-o",
+                &output.to_string_lossy(),
+            ])
+            .assert()
+            .success();
+        fs::read(output).unwrap()
+    };
+
+    let temp_dir = TempDir::new().unwrap();
+    let first = bundle(&temp_dir.path().join("one"));
+    // Cross a whole second so tar's one-second mtime resolution sees the change.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let second = bundle(&temp_dir.path().join("two"));
+    assert!(first == second, "two bundles of the same inputs differ");
+}

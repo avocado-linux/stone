@@ -10,6 +10,16 @@ Started at 2.3.0. For 2.2.0 and earlier, see the annotated tags and `git log`.
 
 ## [Unreleased]
 
+### Fixed
+
+- OS bundles (`.aos`) are now byte-reproducible. Each tar entry carried the
+  artifact's mtime, uid and gid, and every build copies the artifacts fresh, so
+  two bundles of the same inputs never matched. The artifact order also followed
+  a hash map, so a bundle with several artifacts could reorder its tar entries
+  and its `bundle.json` between runs. Entries now get fixed headers (mtime,
+  uid/gid 0, no owner names), and artifacts, images and storage devices are kept
+  in name order.
+
 ## [2.5.0] - 2026-09-14
 
 ### Fixed
