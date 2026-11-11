@@ -818,6 +818,10 @@ fn package_aos(
         .map_err(|e| format!("Failed to create zstd encoder: {e}"))?;
 
     let mut tar_builder = tar::Builder::new(zst_encoder);
+    // Fixed mtime, uid/gid 0, no owner names: two bundles of the same inputs
+    // must be byte-identical, since the device compares the whole bundle's
+    // sha256 to decide whether a release carries an OS update.
+    tar_builder.mode(tar::HeaderMode::Deterministic);
 
     // Add bundle.json at the root
     if verbose {
