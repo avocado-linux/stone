@@ -10,15 +10,34 @@ Started at 2.3.0. For 2.2.0 and earlier, see the annotated tags and `git log`.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-11
+
+### Changed
+
+- A device stops rebooting on app-only deploys, because the bundle bytes no
+  longer change when only applications do. Extension services that used to be
+  restarted by that reboot now need the runtime to restart them after an update.
+  Ship this with an avocadoctl that does.
+- Bundle bytes differ from 2.5.0 for the same inputs: tar headers are fixed, and
+  when more than one storage device has partitions, `bundle.json` takes its
+  layout from the first by name instead of an arbitrary one.
+
 ### Fixed
 
-- OS bundles (`.aos`) are now byte-reproducible. Each tar entry carried the
-  artifact's mtime, uid and gid, and every build copies the artifacts fresh, so
-  two bundles of the same inputs never matched. The artifact order also followed
-  a hash map, so a bundle with several artifacts could reorder its tar entries
-  and its `bundle.json` between runs. Entries now get fixed headers (mtime,
-  uid/gid 0, no owner names), and artifacts, images and storage devices are kept
-  in name order.
+- OS bundles (`.aos`) are now byte-reproducible, so an app-only deploy no longer
+  ships an OS update. The device compares the whole bundle's sha256 to decide
+  whether a release carries an OS update, and three things changed the bytes on
+  every build of the same inputs:
+  - FAT image entries were stamped with the build host's wall clock. They now
+    carry the FAT epoch (1980-01-01 00:00:00).
+  - Each tar entry carried the artifact's mtime, uid and gid. Entries now get
+    fixed headers (mtime, uid/gid 0, no owner names).
+  - The artifact order followed a hash map, so a bundle with several artifacts
+    could reorder its tar entries and its `bundle.json` between runs. Artifacts,
+    images and storage devices are now kept in name order.
+- `describe-manifest` accepts every size unit for partition offsets. It took only
+  bytes and blocks, so it refused any manifest with an offset in kibibytes or
+  mebibytes, every i.MX manifest among them.
 
 ## [2.5.0] - 2026-09-14
 
@@ -115,7 +134,8 @@ Started at 2.3.0. For 2.2.0 and earlier, see the annotated tags and `git log`.
   silently ignored — `expnd` for `expand` yields a non-expanding partition with no
   warning.
 
-[Unreleased]: https://github.com/avocado-linux/stone/compare/2.5.0...HEAD
+[Unreleased]: https://github.com/avocado-linux/stone/compare/2.6.0...HEAD
+[2.6.0]: https://github.com/avocado-linux/stone/compare/2.5.0...2.6.0
 [2.5.0]: https://github.com/avocado-linux/stone/compare/2.4.0...2.5.0
 [2.4.0]: https://github.com/avocado-linux/stone/compare/2.3.0...2.4.0
 [2.3.0]: https://github.com/avocado-linux/stone/compare/2.2.0...2.3.0
